@@ -1,0 +1,97 @@
+include /project/bvag/VermarktungsReport/vermarktungsReport.kis
+
+struc PKItem
+  String name
+  String book
+endstruc
+
+struc PK
+endstruc
+    
+PKItem[] pkList = {new PKItem("BSE", "BSE_VM"), new PKItem("ELM-Lappwald", "ELLA_VM"), new PKItem("Gifhorn", "GIF_VM"), &
+                   new PKItem("Pulheim", "PUL_VM"), new PKItem("Springe", "SPR_VM"), new PKItem("Thale", "THA_VM") }
+
+let pk = pkList[1]
+let year = 2018               
+
+   // Namenskonvention 
+   // 1. product: base, peak, offpeak
+   // 2. variable: value, quantity, price, band
+   // 3. prog, open, closed
+   // 4. commodity (only Z or carbon, power implicite)
+   // 5. perc (optional, if percentage from planned value)
+
+function getPKData(PKItem pk, Integer year) : Reader
+
+// Jahressumme der Peak-Stunden:
+   
+   Timestamp tsFrom = date(year, 1, 1)
+   Timestamp tsUntil = date(year + 1, 1,1)   
+
+
+  // Jahressumme der Base-Stunden: 
+  Float baseHours = getTimeseriesValues66(conf.pfm, vmRepCFG.baseYearHours, tsFrom, tsUntil).do("value0_fl")
+
+// Jahressumme der Peak-Stunden:
+  Float peakHours = getTimeseriesValues66(conf.pfm, vmRepCFG.peakYearHours, tsFrom, tsUntil).do("value0_fl")
+
+    
+   B3Book b = new B3Book(pk.book)
+   Integer bookID = b.select(conf.pfm, "Book.ident_book_l ident", "").do("ident")
+   
+   Reader plan = getDealsBounded(bookID, tsFrom, tsUntil, "class_l = 6 or class_l = 7").aggregate("total(whenFloat(buy_si = 1, quantity, -quantity)) quantityProg, total(whenFloat(buy_si = 1, cost, -cost)) valueProg", "").select("pk.name name, year, %")
+   
+   Reader closed = getDealsBounded(bookID, tsFrom, tsUntil, "class_l <> 6 and class_l <> 7").aggregate("total(whenFloat(buy_si = 1, quantity, -quantity)) quantityClosed, total(whenFloat(buy_si = 1, cost, -cost)) valueClosed", "").select("round(quantityClosed,0) quantityClosed, round(valueClosed, 0) valueClosed, round(valueClosed / quantityClosed,2) specPrice")
+   
+   Integer openTSID = b.getInstance().getParameterList().getTimeseriesList().filter("specification_l = 5104").select(conf.pfm, "Timeseries.ident ident", "").do("ident")
+
+
+   //Off-Peak-Preis als HPFC-Werte für Off-Peak-Stunden:
+   ValueBuffer offPeakpreis = getTimeseriesValues66(conf.pfm, vmRepCFG.hpfcOffPeak, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+
+   // Peak-Preis als HPFC-Werte für Peak-Stunden:
+   ValueBuffer peakpreis = getTimeseriesValues66(conf.pfm, vmRepCFG.hpfcPeak, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+
+   
+   // Offenen Positionen
+   ValueBuffer vb = getTimeseriesValues66(conf.pfm, openTSID, tsFrom, tsUntil).ValueBuffer()
+   
+   Float baseQuantityMeanOpen = Reader.joinCol(offPeakpreis, "Preis", vb, "Menge", "tstamp_ts","tstamp_ts").aggregate("mean(Menge.value) value", "").do("value")
+   Float peakQuantityOpen = Reader.joinCol(peakpreis, "Preis", vb, "Menge", "tstamp_ts","tstamp_ts").aggregate("mean(Menge.value) value", "").do("(value - baseQuantityMeanOpen)  * peakHours")
+   Float baseQuantityOpen = baseQuantityMeanOpen * baseHours
+
+
+   
+   Integer priceInstance = b.select(conf.pfm, "Book.ident_price_l", "").do("ident_price_l")
+   
+   Float basePrice = getCalPrice(priceInstance, now(), "Base", year)
+   Float peakPrice = getCalPrice(priceInstance, now(), "Peak", year)
+   
+   Reader open = series("x", 0, 0, 1).select("round(baseQuantityOpen, 0) baseQuantityOpen" + r0("peakQuantityOpen") + ", basePrice, peakPrice, round(baseQuantityOpen * basePrice,0) baseValueOpen, round(peakQuantityOpen * peakPrice,0) peakValueOpen").select("%, baseValueOpen + peakValueOpen totalValueOpen").select("%, round(totalValueOpen / (baseQuantityOpen + peakQuantityOpen),2) specPriceOpen")  
+
+   Reader r = plan.extend(closed, null).extend(open, null)
+   // Prozentuale Anteile der offenen und geschlossenen Positionen an der Planung
+   r = r.select("%, round(quantityClosed / quantityProg * 100,1) quantityClosedPerc, round(valueClosed / valueProg * 100,1) valueClosedPerc, round((baseQuantityOpen + peakQuantityOpen) / quantityProg * 100,1) quantityOpenPerc, round(totalValueOpen / quantityProg * 100,1) valueOpenPerc")
+   
+//    r = r.select("name, year, quantityProg, quantityClosed, valueClosed, specPrice, offPeakQuantityOpen, peakQuantityOpen, 
+   
+   getPKData = r
+   
+endfunc              
+
+function testPK(Integer year) : Reader
+    Integer i
+    Reader r 
+    for i = 0 to pkList.length - 1 step 1
+       r = r + getPKData(pkList[i], year) 
+    next
+    testPK = r
+endfunc
+
+// Reader r = testPK(2017) + testPK(2018)
+
+// testPK(2018).desc()
+
+
+
+// getPKData(pk, 2018)

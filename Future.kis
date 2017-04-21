@@ -1,0 +1,49 @@
+
+struc Future
+  Server s
+  Writer w
+  DACReader dr
+endstruc
+
+function Future.create(String script, String func, Object[] par) : Future
+   Future f = new Future
+   f.s = connect()
+   f.s.use(script)
+   f.w = f.s.prepare(func) 
+   if par != null then
+     Integer i
+     for i = 0 to par.length - 1 step 1
+       f.w.setObject(i, par[i])
+     next
+   endif
+   f.dr = f.s.startDAC(f.w)
+   Future.create = f
+endfunc
+
+function Future.getData(Future f) : Object
+  if f.dr.next() then
+      Future.getData = f.dr.getData()
+  else
+    Future.getData = null
+  endif
+endfunc
+
+function Future.getData(Future f, String dataKey) : Object
+  while f.dr.next()
+    if (f.dr.getName() != dataKey) then
+      continue    
+    else
+      Future.getData = f.dr.getData()   
+      return
+    endif
+  endwhile
+  Future.getData = null
+endfunc
+
+
+
+function Future.close(Future f) : Integer
+  f.dr.close()
+  f.w.close()
+  f.s.close()   
+endfunc

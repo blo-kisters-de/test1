@@ -1,0 +1,49 @@
+struc StatementCache
+    DataDict c
+endstruc
+
+function StatementCache.create() : StatementCache
+   StatementCache sc = new StatementCache
+   sc.c = new DataDict()
+   StatementCache.create = sc    
+endfunc
+
+
+function StatementCache.prepareQuery(StatementCache this, DBConnection c, String sel, Reader vars) : Writer
+  DataDict c1 = this.c.get((c as Object).asString())
+  if c1 = null then
+      c1 = new DataDict()
+      this.c.set((c as Object).asString(), c1)
+  endif
+  Writer w = c1.get(sel)
+  if w = null then
+      if vars = null then
+        w = c.prepareQuery(sel)
+      else
+        w = c.prepareQuery(sel, vars)
+      endif
+      c1.set(sel, w)
+  endif
+  vars.close()
+  StatementCache.prepareQuery = w
+endfunc
+
+function StatementCache.prepare(StatementCache this, DBConnection c, String exe, Reader vars) : Writer
+  DataDict c1 = this.c.get((c as Object).asString())
+  if c1 = null then
+      c1 = new DataDict()
+      this.c.set((c as Object).asString(), c1)
+  endif
+  Writer w = c1.get(exe)
+  if w = null then
+      if vars = null then
+        w = c.prepare(exe)
+      else
+        w = c.prepare(exe, vars)
+      endif
+      c1.set(exe, w)
+  endif
+  StatementCache.prepare = w
+endfunc
+
+StatementCache sc = new StatementCache()

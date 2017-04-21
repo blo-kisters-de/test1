@@ -1,0 +1,174 @@
+include /project/bvag/pfm.kis
+include /project/bvag/Util.kis
+include /project/bvag/Future.kis
+
+module de.kisters.kiscript.poi.ssf.SSF
+
+function newSheet(SSFWorkbook wb, String name, Integer year) : SSFSheet
+    SSFSheet sheet = wb.createSheet(name)
+    SSFRow row = sheet.createRow(0)
+    row.createCell(0).setCellValue("Jahr")
+    row.createCell(1).setCellValue(year as Float)
+    newSheet = sheet
+endfunc
+
+function addTitle(SSFSheet sheet, Integer offset, Reader title) : Integer
+  Integer nextRow = offset
+  if sheet.getLastWriteRange() != null then
+     nextRow = sheet.getLastWriteRange().getLastCell().getRow() + offset      
+  endif
+  sheet.writeSheetHorizontally(title.select("NAME"), nextRow, 2, true)  
+endfunc
+
+function addInfo(SSFSheet sheet, String desc, Integer offset, Reader info) : Integer
+  Integer nextRow = offset
+  if sheet.getLastWriteRange() != null then
+     nextRow = sheet.getLastWriteRange().getLastCell().getRow() + offset      
+  endif
+  SSFRow row = sheet.createRow(nextRow)
+  SSFCell cell = row.createCell(1)
+  cell.setCellValue(desc)
+  sheet.writeSheetVertically(info, nextRow, 2, true)  
+endfunc
+
+// Integer jahr = 2016
+
+function createLimitReport(Integer jahr) : InputStream
+  SSFWorkbook wb =  SSFWorkbook.createXSSFWorkbook()
+  SSFSheet sheet = wb.createSheet("Stammdaten")
+  Reader rMeta = getTradePartnerMetaDataStromGas(now())
+  sheet.writeSheetHorizontally(rMeta.desc().select("NAME"), 2, 1, false)
+  sheet.writeSheetVertically(rMeta, 3, 1, false)
+  
+  sheet = newSheet(wb, "Berechnungen", jahr)
+  sheet.setColumnWidth(1, 100 * 256)
+  sheet.setColumnWidth(2, 35 * 256)
+  
+//  Future f2 = new Future("/project/bvag/pfm.kis", "getRecoveryCostAggregatedDAC(Integer jahr, Timestamp currentDate)", new Object {jahr , now()})
+
+  
+  ValueBuffer vbDeals = getDeals(date(jahr, 1, 1), date(jahr + 1, 1,1), "")
+  ValueBuffer vbDealsGas = getDealsGas(date(jahr, 1, 1), date(jahr + 1, 1,1), "")
+  
+  Reader rStrom = vbDeals.Reader().filter("cost <> null and cost <> 0").select("%, getDealClass(class_l) class_s, getTradePartner(tradepartnerident_l) trade_s")
+  Reader rGas   = vbDealsGas.Reader().filter("cost <> null and cost <> 0").select("%, getDealClass(class_l) class_s, getTradePartnerGas(tradepartnerident_l) trade_s")
+
+  Reader r = (rStrom + rGas).makeRewindable()
+  
+  
+  SSFRow row = sheet.createRow(0)
+  SSFCell cell = row.createCell(1)
+  cell.setCellValue("Gesamthandelsvolumen (Cross-Commodity) in € über alle HP in Mio €")
+
+  cell = row.createCell(2)
+  Float gesamt = r.aggregate("total(cost) cost", "").do("cost") / 1e6
+  cell.setCellValue(gesamt)
+  
+  
+  // Verkaufs und Kaufsvolumen
+  String[] text = {"Verkaufsvolumen (Cross-Commodity) in Mio € über alle HP", "Kaufvolumen (Cross-Commodity) in Mio € über alle HP"}
+  Reader r1 = r.aggregate("buy_si, total(cost) cost", "buy_si").select("text[row] what, cost/1e6 cost")
+  sheet.writeSheetVertically(r1, 1, 1, true)
+  
+
+  // Gesamthandelsvolumen aller Handelspartner
+  r1 = r.aggregate("commodity_name_s, sleeve, total(quantity) quantity, total(cost) cost","commodity_name_s, sleeve").select("commodity_name_s, whenString(sleeve,'ja', 'nein') sleeve, round(quantity,1) quantity, round(cost/1e6,3) cost").makeRewindable()
+  Reader r11 = r1.filter("commodity_name_s = 'Strom'").aggregate("commodity_name_s, 'total', total(quantity) quantity, total(cost) cost", "").ValueBuffer().Reader()
+  r1 = r1 + r11
+  
+  
+  addTitle(sheet, 2, r1.desc())
+  addInfo(sheet, "Gesamthandelsvolumen aller Handelspartner", 1, r1)
+  
+  // Alle Handelspartner, Kauf/Verkauf, Volumen und Mengen, Commodities, Sleeve
+  text = {"Verkauf", "Kauf"}
+  r1 = r.aggregate("buy_si, commodity_name_s, sleeve, total(quantity) quantity, total(cost) cost","buy_si, commodity_name_s, sleeve").select("text[buy_si] what, commodity_name_s, whenString(sleeve,'ja', 'nein') sleeve, round(quantity,1) quantity, round(cost/1e6,3) cost").sort("commodity_name_s")
+  addTitle(sheet, 2, r1.desc())
+  addInfo(sheet, "Alle Handelspartner, Kauf/Verkauf, Volumen und Mengen, Commodities, Sleeve", 1, r1)
+
+  //Gesamthandelsvolumen (Cross-Commodity) in € je Handelspartner und in % vom Gesamtvolumen
+  r1 = r.aggregate("trade_s, total(cost) cost", "trade_s").select("trade_s, round(cost,0) volumen, round(cost/gesamt * 100 / 1e6,1) anteil").makeRewindable()
+  
+  // Verkaufsvolumen (Cross-Commodity) in € je Handelspartner
+  // Kaufvolumen (Cross-Commodity) in € je Handelspartner
+  r11 = r.aggregate("trade_s, buy_si, total(cost) cost", "trade_s, buy_si").select("trade_s, buy_si, round(cost,0) cost").transposeGroup("trade_s", "cost", "buy_si", "sell, buy").Reader().select("%, null0(sell) + null0(buy) total").makeRewindable()
+
+  r11 = Reader.joinCol(r1, "A", r11, "B", "trade_s", "trade_s", 3).select("A.trade_s trade_s, A.volumen volumen, A.anteil anteil, B.sell sell, B.buy buy")
+
+
+  // Verkaufsvolumen und Mengen  je Handelspartner
+  String[] quantCost = {"quantity", "cost"}
+  Reader r12 = r.rowCol("trade_s", "commodity_name_s,buy_si", "total(quantity) quantity, total(cost) cost", null)
+  Reader rHead = r12.getColClasses().select("commodity_name_s + ' ' + text[buy_si] + ' Q'", {"commodity_name_s + ' ' + text[buy_si] + ' C'"})
+  r12.changeColNames(1, rHead)
+  
+ 
+  r11 = Reader.joinCol(r11, null, r12, null, "trade_s", "trade_s", 3)
+  // Herausnehmen der doppelten Spalte trade_s:
+  // ValueBuffer vbHead = r11.desc().select("%, row x").filter("row = 0 or NAME != 'trade_s'").ValueBuffer()
+  // String sel = pattern("%s", vbHead.select("'this.getField(' + x + ').getObject()'"))
+  // r11 = r11.select(sel)
+  r11 = r11.selectFields("row = 0 or NAME != 'trade_s'")
+
+  // r11.changeColNames(0, vbHead)
+  
+  addTitle(sheet, 2, r11.desc())
+//  addInfo(sheet, "Kauf/Verkaufsvolumen und Mengen  je Handelspartner", 1, r1)
+  addInfo(sheet, "Kauf/Verkaufsvolumen und Mengen  je Handelspartner", 1, r11)
+
+  sheet = newSheet(wb, "Limits", jahr)
+  sheet.setColumnWidth(1, 25*256)
+  sheet.setColumnWidth(2, 46*256)
+  sheet.setColumnWidth(3, 7*256)
+  sheet.setColumnWidth(5, 21*256)
+  
+  // Limit-Berechnung
+  ValueBuffer vb = calculateLimits(jahr)
+  addTitle(sheet, 2, vb.desc())
+  addInfo(sheet, "Limits  je Handelspartner", 1, vb)
+
+
+  // Wiederbeschaffung
+  sheet = newSheet(wb, "Wiederbeschaffung", jahr)
+  
+  sheet.setColumnWidth(1, 20 * 256)
+  sheet.setColumnWidth(2, 40 * 256)
+  sheet.setColumnWidth(4, 10 * 256)
+  row = sheet.getRow(0)
+  row.createCell(3).setCellValue("Stichtag")
+  cell = row.createCell(4)
+  cell.setCellValue(date(now().year(), now().month(), now().day()))
+  SSFCreationHelper createHelper = wb.getCreationHelper()
+  SSFCellStyle cs = wb.createCellStyle()
+  cs.setDataFormat(createHelper.createDataFormat().getFormat("dd.mm.YYYY"))
+  cell.setCellStyle(cs)
+
+
+    r1 = getRecoveryCostAggregated(jahr, now()).makeRewindable()
+//  r1 = f2.getData("getRecoveryCostAggregatedDAC").asReader().makeRewindable()
+    
+    Reader r3 = r1.rowCol("tradePartner, tradepartnerident_l, commodity_name_s", "when", "quantity, cost, recoveryQuantity, recoveryCost"). &
+        select("tradePartner, tradepartnerident_l, commodity_name_s, when_hafr__quantity hafr_quantity, when_hafr__cost hafr_cost, when_hafr__recoveryQuantity hafr_recoveryQuantity, when_hafr__recoveryCost hafr_recoveryCost, when_fr1_quantity fr1_quantity, when_fr1_cost fr1_cost, when_fr1_recoveryQuantity fr1_recoveryQuantity, when_fr1_recoveryCost fr1_recoveryCost, when_fr2_quantity fr2_quantity, when_fr2_cost fr2_cost, when_fr2_recoveryQuantity fr2_recoveryQuantity, when_fr2_recoveryCost fr2_recoveryCost, when_fr3_quantity fr3_quantity, when_fr3_cost fr_cost, when_fr3_recoveryQuantity fr3_recoveryQuantity, when_fr3_recoveryCost fr3_recoveryCost")
+    addTitle(sheet, 2, r3.desc())  
+    addInfo(sheet, "", 1, r3)
+    
+    String cols = "total(quantity) quantity, total(cost) cost, total(recoveryQuantity) recoveryQuantity, total(recoveryCost) recoveryCost"
+    
+    Reader r2 = r1.aggregate("'','', commodity_name_s, " + cols , "commodity_name_s")
+    addTitle(sheet, 2, r2.desc())  
+    addInfo(sheet, "Total commodities", 2, r2)
+    
+    r2 = r1.aggregate("'', '', '', " + cols , "")
+    addTitle(sheet, 2, r2.desc())  
+    addInfo(sheet, "Total", 2, r2)
+
+    
+  File f = new File(conf.limitReportResultPath + "\limits_" + now().asString("%y_%m_%d_%H_%M")+".xlsx")
+  f.openWrite()
+  f.write(wb.write())
+  f.close()
+  wb.close() 
+  
+  // createLimitReport = f.InputStream()  
+
+endfunc

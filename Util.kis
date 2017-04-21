@@ -1,0 +1,106 @@
+function empty(String s) : Boolean
+   empty = trim(s) = "" or s = null
+endfunc
+
+function null0(Float v) : Float
+    null0 = v
+    if v = null then
+      null0 = 0.0f
+    endif
+endfunc
+
+
+function getSQLTimestamp(DBConnection c, Timestamp ts, String timezone) : String
+  String tz = setTimezone(timezone)
+  if lower(c.getProductName()) contains 'oracle' then
+    getSQLTimestamp = strts(ts, "to_date('%Y-%m-%d %H:%M:%S', 'YYYY-mm-dd HH24:MI:SS')")    
+  else
+    throw runtimeError("implement " + c.getProductName())
+  endif
+endfunc
+
+function getSQLTimestamp(DBConnection c, Timestamp ts) : String
+  if lower(c.getProductName()) contains 'oracle' then
+    getSQLTimestamp = strts(ts, "to_date('%Y-%m-%d %H:%M:%S', 'YYYY-mm-dd HH24:MI:SS')")    
+  else
+    throw runtimeError("implement " + c.getProductName())
+  endif
+endfunc
+
+
+function getSQLTimestamp1(DBConnection c, Timestamp ts, String timezone) : String
+  String tz = setTimezone(timezone)
+  if lower(c.getProductName()) contains 'oracle' then
+    getSQLTimestamp1 = strts(ts, "%Y-%m-%d %H:%M:%S")    
+  else
+    throw runtimeError("implement " + c.getProductName())
+  endif
+endfunc
+
+function Reader.convertHeadNames(Reader r) : Reader
+  Reader rs = r.desc().select("replaceAll(NAME, '[ /\|\+]', '_') NAME")
+ rs = rs.select("replaceAll(NAME, '[\(\)-\.¿&]', '') NAME")
+ rs = rs.select("replaceAll(NAME, 'Ä', 'Ae') NAME")
+ rs = rs.select("replaceAll(NAME, 'Ö', 'Oe') NAME")
+ rs = rs.select("replaceAll(NAME, 'Ü', 'Ue') NAME")
+ rs = rs.select("replaceAll(NAME, 'ä', 'ae') NAME")
+ rs = rs.select("replaceAll(NAME, 'ö', 'oe') NAME")
+ rs = rs.select("replaceAll(NAME, 'ü', 'ue') NAME")
+ rs = rs.select("replaceAll(NAME, 'ß', 'ss') NAME")
+ rs = rs.select("replaceAll(NAME, '/', 'ss') NAME")
+ rs = rs.select("replaceAll(NAME, '_+', '_') NAME")
+ r.changeColNames(rs)
+ Reader.convertHeadNames = r    
+endfunc
+
+function getMonthRange(Integer month, Integer year) : Timestamp[]
+   Timestamp[] result = new Timestamp[2]
+   result[0] = date(year, month, 1)
+   result[1] = result[0].addMonth(1)
+   getMonthRange = result
+endfunc
+
+function checkParameterNotNull(DataDict d, String prefix, String sParas, String[] errors) : Integer
+  Integer i
+  String[] paras = split(sParas, ",")
+  String message = ""
+  if prefix != null and prefix != "" then
+      prefix = prefix + "."
+  endif
+  for i = 0 to paras.length - 1 step 1
+    if d.get(prefix + trim(paras[i])) = null then
+        String m = prefix + trim(paras[i])  + " is not set"
+        if errors != null then
+           m = format(errors[i], prefix + trim(paras[i]))
+        endif
+        message = message + CRLF + m
+    endif
+  next
+  if strlen(message) > 0 then
+      message = mid(message, 3)
+      throw runtimeError(message)
+  endif
+endfunc
+
+function getKey(String prefix, String key) : String
+  if prefix != null and prefix != "" then
+      prefix = prefix + "."
+  endif
+  getKey =  prefix + key
+endfunc
+
+
+
+function DataDict.getRecord(DataDict d) : Reader
+    DataDict.getRecord = d.asReader(true)
+endfunc
+
+function DataDict.goc(DataDict this, String key) : DataDict
+   DataDict d = this.getDataDict(key)
+   if d = null then    
+      d = new DataDict()
+      this.set(key, d)
+      d.set("super", this)
+   endif
+   DataDict.goc = d
+endfunc

@@ -1,0 +1,46 @@
+include /project/bvag/Configuration.kis
+
+struc HistUserFields
+  ValueBuffer vbMain    
+  ValueBuffer ixIdent
+  ValueBuffer ixId
+  ValueBuffer vbHistUserFieldValues
+  ValueBuffer ixHistUserFieldValues
+endstruc
+
+// 15010 = TradePartner
+function HistUserFields.create(Integer instType) : HistUserFields
+    HistUserFields res = new HistUserFields
+    res.vbMain = conf.pfm.select("* from wk_histuserfields where instancetyp_l = " + instType).ValueBuffer()
+    res.ixIdent = res.vbMain.index("ident","")
+    res.ixId = res.vbMain.index("id_l","")
+    
+    res.vbHistUserFieldValues = conf.pfm.select("* from wk_histuserfieldvalues").ValueBuffer()
+    res.ixHistUserFieldValues = res.vbHistUserFieldValues.index("ident, field_l","")
+    
+    HistUserFields.create = res
+endfunc
+
+
+function HistUserFields.getContent(HistUserFields this, Integer ident, String field) : String
+   if this.ixIdent.searchBin("equal", ident) then
+     HistUserFields.getContent = this.ixIdent.getField(field).getString()
+   else
+     HistUserFields.getContent = null
+   endif  
+endfunc
+
+function HistUserFields.getListContent(HistUserFields this, Integer ident, Integer field) : String
+   if this.ixHistUserFieldValues.searchBin("equal", ident, field) then
+     HistUserFields.getListContent = this.ixHistUserFieldValues.value_s
+   else
+     HistUserFields.getListContent = null
+   endif  
+endfunc
+
+
+function test() : Integer
+   HistUserFields huf = new HistUserFields(15010)
+   huf.getContent(4437174, "fieldname_s") 
+   huf.getListContent(4437181,	4437174)
+endfunc

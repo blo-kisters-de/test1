@@ -1,0 +1,459 @@
+include /project/bvag/Configuration.kis
+include /project/bvag/B3Timeseries.kis
+include /project/bvag/InvoicePreparation.kis
+/** EEX
+ *
+ *@param d 
+ *@return DataDict: spot = price-timeseries
+ */
+function createSpotMarket(String iiID, DataDict d, DataDict result) : DataDict
+  checkParameterNotNull(result, "", "tsFrom, tsUntil", null)  
+  Timestamp tsFrom = result.getTimestamp("tsFrom")
+  Timestamp tsUntil = result.getTimestamp("tsUntil")
+  Reader r = getTimeseriesValues66(conf.pfm, 31620, tsFrom, tsUntil)
+  ValueBuffer vb = r.ValueBuffer()
+  result.set("ts", vb)
+  Float meanPrice = vb.groupSelect("mean(value) price", "", "").do("price")      
+  result.set("meanPrice", meanPrice)
+  createSpotMarket = result
+endfunc
+
+qpDesc.set("eex", { &
+    new ItemRecord(true, "tsFrom", "Timestamp", "Startzeitpunkt"), &
+    new ItemRecord(true, "tsUntil", "Timestamp", "Endzeitpunkt"), &
+    new ItemRecord(false, "ts", "ValueBuffer", "Preiszeitreihe"), &
+    new ItemRecord(false, "meanPrice", "Float", "Durchschnittspreis") &
+   })
+    
+qpDescType.set("eex", "Das Element ermittelt die Spotmarktpreise für einen Zeitbereich aus der dafür hinterlegten Preis-Zeitreihe im PFM")
+
+/**
+ * OTC-Values
+ *@param d 
+    otc.book which is a book-ident
+    otc.buy true or false whether it is "buy" or "sell"
+    tsFrom
+    tsUntil
+    
+ *@return DataDict 
+    otc.buy
+    or
+    otc.sell
+    
+    <prefix>.ts the timeseries as a table with total columns
+    <prefix>.max the max power
+    <prefix>.totalCost total cost of the deal
+    <prefix>.totalQuantity total delivered or feed quantity of the 
+ */
+function createOTC(String iiID, DataDict d, DataDict resultDict) : DataDict
+  static Writer w = conf.pfm.prepareQuery("select ident, id_l, pricepermwh_fl, pricevaluelist_l, buy_si from v_sd_deal where bookident_l = ? and buy_si = ? and supplyend_ts > ? and supplystart_ts <= ?")
+  checkParameterNotNull(resultDict, "", "otc.buy, otc.book", null)
+//   checkParameterNotNull(d, "", "tsFrom, tsUntil", null)
+  Boolean buy = resultDict.getBoolean("otc.buy")
+  Integer book = resultDict.get("otc.book")
+  Timestamp tsFrom = resultDict.getTimestamp("tsFrom")
+  Timestamp tsUntil = resultDict.getTimestamp("tsUntil")
+  if (tsFrom = null) then
+      tsFrom = d.getTimestamp("tsFrom")
+  endif
+  if (tsUntil = null) then
+    tsUntil = d.getTimestamp("tsUntil")  
+  endif
+  Reader r = w.execute(book, buy, tsFrom, tsUntil) 
+  r = r.extend("deal", 'conf.pfm.select("ident_vl_l from v_zr_all where ident_inst_l = " + ident + " and specification_l = 5000")', "inst", false)
+  if r = null then
+      resultDict.setFloat("specificPrice", null)
+      resultDict.setFloat("maxQuantity", 0)
+      resultDict.setFloat("totalCost", 0)
+      resultDict.setFloat("totalQuantity", 0)
+      return
+  endif
+  ValueBuffer vb1 = r.ValueBuffer()
+  resultDict.set("deals", vb1)
+  r = vb1.Reader()
+  Reader result = null
+  String totalQuantity = ""
+  String totalCost = ""
+  String sel = ""
+  Field fVLID = r.getField("inst.ident_vl_l")
+  Field fDealID = r.getField("deal.id_l")
+  Field fDealPriceVLID = r.getField("deal.pricevaluelist_l")
+  Field fPricePerMWH = r.getField("deal.pricepermwh_fl")
+  ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").ValueBuffer()
+  result = vbTS
+  while r.next()
+    Reader r1 = getTimeseriesValues66(conf.pfm, fVLID.getLong(), tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select(format("tstamp_ts D%1$d.ts, value D%1$d.quantity", fDealID.getLong()) ).ValueBuffer().Reader()
+    Reader rPrice
+    if (fDealPriceVLID.getLong() = null) then
+      rPrice = vbTS.select("ts D" + fDealID.getLong() + ".ts, fPricePerMWH.getFloat() D" + fDealID.getLong() + ".price").ValueBuffer()  
+    else
+      rPrice = getTimeseriesValues66(conf.pfm, fDealPriceVLID.getLong(), tsFrom, tsUntil)  &
+          .select(format("tstamp_ts D%1$d.ts, value D%1$d.price", fDealID.getLong())).ValueBuffer().Reader()
+    endif
+    result = Reader.joinCol(result, null, r1, null, "ts", r1.getField(0).getName(), 3)
+    result = Reader.joinCol(result, null, rPrice, null, "ts", rPrice.getField(0).getName(), 3)
+    result = result.select(format("%%, if (D%1$d.quantity = null or D%1$d.price = null, 0, D%1$d.quantity * D%1$d.price) D%1$d.cost", fDealID.getLong()))  
+    totalQuantity = totalQuantity + format(" + if(D%1$d.quantity = null, 0, D%1$d.quantity)", fDealID.getLong())
+    totalCost = totalCost + format("+ D%1$d.cost", fDealID.getLong()) 
+    sel = sel + format(", D%1$d.quantity, D%1$d.price, D%1$d.cost", fDealID.getLong())
+  endwhile
+  totalQuantity = mid(totalQuantity, 3)
+  totalCost = mid(totalCost, 3)
+  sel = mid(sel, 3)
+  ValueBuffer vb = result.select("ts, " + sel + "," + totalQuantity + " totalQuantity," + totalCost + " totalCost").ValueBuffer()
+  
+
+  Reader rAgg = vb.groupSelect("total(totalQuantity) totalquantity, max(totalQuantity) maxQuantity, total(totalCost) totalCost", "", "")
+  rAgg.next()
+//  String prefix = "otc.buy." + buy
+  resultDict.set("ts", vb)
+  resultDict.set("specificPrice", rAgg.getField("totalCost").getFloat() / rAgg.getField("totalQuantity").getFloat())
+  resultDict.set("maxQuantity", rAgg.getField("maxQuantity").getFloat())
+  resultDict.set("totalCost", rAgg.getField("totalCost").getFloat())
+  resultDict.set("totalQuantity", rAgg.getField("totalquantity").getFloat())
+  rAgg.close()  
+//    vb2.transpose(null, 0, -1, 0, -1, 1).groupSelect("total(F0) total"
+  createOTC = resultDict
+endfunc
+
+qpDescType.set("otc", "Dieses Element wird verwendet, um Stromein- bzw. verkäufe zu ermitteln. Die Daten werden aus dem PFM über ein Buch ermittelt . Die einzelenen Deals für das Buch werden aufaggregiert.")
+
+qpDesc.set("otc",  { &
+    new ItemRecord(true, "tsFrom", "Timestamp", "Startzeitpunkt"), &
+    new ItemRecord(true, "tsUntil", "Timestamp", "Endzeitpunkt"), &
+    new ItemRecord(true, "buy", "Boolean", "Ob es sich um einen Kauf- (true) oder Verkauf handelt"), &
+    new ItemRecord(true, "book", "Integer", "Buch-Ident im BELVIS - PFM zu dem Handel"), &
+    new ItemRecord(false, "ts", "ValueBuffer", "Die Tabelle mit allen Deals, die in dem betroffenen Zeitbereich gehandelt wurden jeweils mit Menge, Einzelpreis, Gesamtpreis. Zusätzliche Spalten enthalten die Gesamtmenge und den GesamtBetrag pro Zeitpunkt"), &
+    new ItemRecord(false, "specificPrice", "Float", "der spezifische Preis ct/kWh"), &
+    new ItemRecord(false, "maxQuantity", "Float", "die maximal gelieferte Menge im Zeitraum "), &
+    new ItemRecord(false, "totalCost", "Float", "die Summe der Kosten des Deals im Zeitraum"), &
+    new ItemRecord(false, "totalQuantity", "Float", "die Summe der gelieferten bzw. eingekauften Energiemenge im Zeitraum") &
+   })
+
+
+
+function createGrid(Timestamp tsFrom, Timestamp tsUntil, Integer iStep) : Reader
+    createGrid = series("ts", "tsFrom + iStep", "ts <= tsUntil", "ts + iStep")
+endfunc
+
+
+
+function createQuantity(String iiID, DataDict d, DataDict resultDict) : DataDict
+// conf.edm.select("e.meteringcode_s,v.ident_vl_l, v.SPECIFICATION_L,V.name_zr_s from v_zr_all v,entnahmeattr e where V.ident_inst_l = E.IDENT and e.adresse_l = 36503011")
+  static String sqlOut = "e.meteringcode_s,e.adresse_l, v.ident_vl_l, v.SPECIFICATION_L,V.name_zr_s from v_zr_all v,entnahmeattr e where V.ident_inst_l = E.IDENT and v.specification_l in (%s) and e.meteringcode_s in (%s)"
+  static String sqlIn = "e.meteringcode_s,e.adresse_l, v.ident_vl_l, v.SPECIFICATION_L,V.name_zr_s from v_zr_all v,einspattr e where V.ident_inst_l = E.IDENT and v.specification_l in (%s) and e.meteringcode_s in (%s)"
+
+
+  checkParameterNotNull(resultDict, "", "tsFrom, tsUntil, direction, meteringCode", null)
+
+  Timestamp tsFrom  = resultDict.getTimestamp("tsFrom")
+  Timestamp tsUntil = resultDict.getTimestamp("tsUntil")
+  Boolean direction = resultDict.get("direction")
+  ValueBuffer vbMC = resultDict.getValueBuffer("meteringCode")
+  String selMC = pattern("'%s'", vbMC)
+  String spec
+  String tarif = resultDict.get("tarif")
+  Reader r
+  if (not direction) then
+    // Einspesisung
+    spec = "720"
+    if (tarif = "NT") then
+	  spec = "888"
+	endif
+	r = conf.edm.select(format(sqlIn, spec, selMC))
+	
+	
+  else
+    // Ausspeisung
+    spec = "704" // Verbrauch
+    if (tarif = "NT") then
+	  spec = "882"
+    endif 
+    r = conf.edm.select(format(sqlOut, spec, selMC))
+  endif
+  String currentMC
+  Reader result = createGrid(tsFrom, tsUntil, minute(15))
+  while (r.next())
+    currentMC = r.meteringcode_s
+    Reader rts = Reader.joinCol(createGrid(tsFrom, tsUntil, minute(15)), null, getTimeseriesValues66(conf.edm, r.ident_vl_l, tsFrom, tsUntil), null, "ts", "tstamp_ts", 1)
+    rts = rts.select("tstamp_ts, whenFloat(value = null or pf = 1, 0, value) value, state_l, whenInteger(pf=null, 1, pf) pf")
+    result = Reader.joinCol(result, null, rts.select("tstamp_ts, value"), currentMC, "ts", "tstamp_ts", 0)
+  endwhile
+  String sel1 = pattern("%s", result.desc().filter("not (NAME like '%.tstamp_ts')"))
+  String selTotal = pattern("%s", "+ %s", result.desc().filter("NAME != 'ts' and not (NAME like '%.tstamp_ts')"))
+  ValueBuffer vbTS = result.select(sel1 + "," + selTotal + " total").ValueBuffer()
+  resultDict.set("ts", vbTS)
+
+  // calculate the total for each meteringpoint
+  String sel2 = pattern("total(%1$s) %1$s", vbTS.desc().filter("NAME != 'ts' and NAME != 'total'"))
+  ValueBuffer vb1 = vbTS.Reader().groupSelect(sel2, "", "").ValueBuffer()
+
+  // calculate the total for all
+  String sel3 = pattern("total(%1$s) %1$s", vb1.desc())  
+  Float total = vb1.transpose(null, 0, -1, 0, -1, 1).groupSelect("total(F0 as Float) total", "", "").do("total")
+  resultDict.set("totalQuantity", total)
+
+  // calculate the max measured quantity 
+  sel3 = pattern("max(%1$s) %1$s", vb1.desc())  
+  Float maxQuantity = vb1.transpose(null, 0, -1, 0, -1, 1).groupSelect("max(F0 as Float) max", "", "").do("max")
+  resultDict.set("maxQuantity", maxQuantity)
+
+
+  // calculate the relative portion for all metering points
+  String sel4 = pattern("%1$s / total %1$s", vb1.desc())
+  ValueBuffer vb2 = vb1.select(sel4).ValueBuffer()
+
+  // put total and relative portion into one table, and transpose it to have in each line one meteringPoint
+  ValueBuffer vb4 = (vb1.select("'quantity' what, %") + vb2.select("'relativeQuantity' what, %")).ValueBuffer()
+  vb4 = vb4.transpose("what", 0, -1, 1, -1, 1, 0, "MeteringCode")
+  resultDict.set("totals",   vb4.copy())
+
+  createQuantity = resultDict
+endfunc
+
+qpDescType.set("quantity", "Ermittlung von Energiemengen zu einer gegebenen Liste von Zählpunkten und einem Zeitbereich")
+
+qpDesc.set("quantity",  { &
+    new ItemRecord(true, "tsFrom", "Timestamp", "Startzeitpunkt"), &
+    new ItemRecord(true, "tsUntil", "Timestamp", "Endzeitpunkt"), &
+    new ItemRecord(true, "tarif", "String", "optional: NT = Niedertarif"), &
+    new ItemRecord(true, "direction", "Boolean", "false = Einspeisung, true = Entnahme"), &
+    new ItemRecord(true, "meteringCode", "ValueBuffer", "Tabelle mit den Meteringcodes in der ersten Spalte"), &
+    new ItemRecord(false, "ts", "ValueBuffer", "Die Tabelle mit allen Zählpunkten"), &
+    new ItemRecord(false, "maxQuantity", "Float", "die maximale Menge im Zeitraum "), &
+    new ItemRecord(false, "totalQuantity", "Float", "die Summe der Energiemenge"), &
+    new ItemRecord(false, "totals", "ValueBuffer", "die Summen und relativen Summen aller Mengen") &
+   })
+
+
+function createFormulaItem(String id, DataDict d, DataDict result ) : DataDict
+   // nothing to do
+endfunc
+
+qpDescType.set("formula", "Dieses Element wird verwendet, um die Daten aus verschiedenen Vorbereitungstypen miteinander zu verrechnen, um sie in dem Ergebnis darzustellen")
+
+// qpDesc.set("formula",  new ItemRecord[0])
+
+
+
+function createEEGFee(String id, DataDict d, DataDict resultDict) : DataDict
+    checkParameterNotNull(resultDict, "", "rule", null)
+    
+    String rule = resultDict.get("rule")
+    if (rule != "fix") and rule != "schwelle" then
+        throw runtimeError(format("Rule must be either 'fix' or 'schwelle', found %s", rule))
+    endif
+
+    if (rule = "fix") then
+        checkParameterNotNull(resultDict, "", "fee", null)
+    else
+        checkParameterNotNull(resultDict, "", "threshold, price, consumption", null)
+        String schwelle = resultDict.get("threshold")
+        String price = resultDict.get("price")
+        Float consumption = resultDict.get("consumption")
+        Reader r = arrayAsReader(split(schwelle, ",")).extend(arrayAsReader(split(price, ",")), "price.").select("valf(value) value, valf(price.value) price").sort("value desc").filter("value < consumption")
+        if r.next() then
+          resultDict.set("fee", r.getField(1).getFloat())
+        else
+         resultDict.set("fee", 0.0f)
+        endif
+        r.close()
+    endif
+    createEEGFee = resultDict
+endfunc
+
+qpDescType.set("eeg", "Bestimmung der EEG-Umlage, bei Angabe einer Regel und Menge. Es werden die Regeln 'fix' und 'schwelle' unterstützt")
+
+qpDesc.set("eeg",  { &
+    new ItemRecord(true, "rule", "String", "Wie soll die EEG-Umlage gebildet werden: 'fix' oder mit 'schwelle'"), &
+    new ItemRecord(true, "fee", "Float", "Wenn rule = 'fix', soll hier der Umlagenpreis eingetragen werden. Andernfalls rechnet das System Preis aus, und speichert ihn in dieses Feld."), &
+    new ItemRecord(true, "threshold", "String", "Komma separierte Liste mit Schwellwerten, z.B. '0, 10000, 30000, 50000'"), &
+    new ItemRecord(true, "price", "String", "Komma separierte Liste mit Preisen, z.B. '12.4, 24.0, 36.0, 44.0'"), &
+    new ItemRecord(true, "consumption", "Float", "Die Energiemenge, die für die Berechnung der EEG Umlage herangezogen werden soll"), &
+    new ItemRecord(false, "fee", "Float", "Der Umlagenpreis") &
+})
+
+function createReader(String id, DataDict d, DataDict resultDict) : DataDict
+    checkParameterNotNull(resultDict, "", "select", null)
+    ValueBuffer vb
+    Object obj = resultDict.get("select")
+    Error error
+    try
+      vb = obj as ValueBuffer
+    catch error 
+      vb = (obj as Reader).ValueBuffer()
+    endtry
+    resultDict.set("result", vb)
+    
+    String agg = resultDict.aggregate
+    String group = whenString(resultDict.group = null, "", resultDict.group)
+    String having = whenString(resultDict.having = null, "", resultDict.having)
+    if agg != null then
+       Reader r
+       if (group != null) then
+         r = vb.Reader().sort(group).groupSelect(agg, group, having) 
+       else
+         r = vb.Reader().groupSelect(agg, group, having)
+       endif
+       resultDict.set("resultAggregate", r.ValueBuffer())
+    endif
+    createReader = resultDict
+endfunc
+
+qpDescType.set("reader", "Dieser Typ generiert eine Tabelle")
+qpDesc.set("reader",  { &
+    new ItemRecord(true, "select", "String", "Der Funktionsaufruf, der eine Tabelle erzeugen soll. Der Ausdruck muss einen Reader oder einen ValueBuffer zurückgeben."), &
+    new ItemRecord(true, "aggregate", "String", "optional: ein String, mit dem die Tabelle aggregiert wird, z.B. total(erloes) summe, mean(erloeas) mittel usw."), &
+    new ItemRecord(true, "group", "String", "optional: ein String, mit dem bei Aggregation die Gruppenkriterien angegeben werden. Falls nicht gesetzt, wird die gesamte Tabelle aggregiert."), &
+    new ItemRecord(true, "having", "String", "optional: ein String, mit dem bei Aggregation die Ergebisliste gefiltert werden kann. Hier können auch Gruppenfunktionen verwendet werden, z.B. count() > 1 usw."), &
+    new ItemRecord(false, "result", "ValueBuffer", "Die Ergebnistabelle"), &
+    new ItemRecord(false, "resultAggregate", "ValueBuffer", "Die aggregierte Ergebnistabelle, falls aggregate gesetzt war") &
+    })
+
+function createDistribution(String id, DataDict d, DataDict resultDict) : DataDict
+  checkParameterNotNull(resultDict, "", "table, column", null)
+  ValueBuffer vb = resultDict.get("table") as ValueBuffer
+  String column = resultDict.get("column")
+  if (left(column, 1)) = "=" then
+    column = mid(column, 2)  
+  endif
+  String alias = resultDict.get("alias")
+  if (alias = null) then
+     alias = "distribution"
+  endif
+  Reader r = vb.select(column)
+  Float summe = r.groupSelect("total(" + column+ ") summe", "", "").do("summe")
+  r = vb.select("%, (" + column + ") / summe " + alias)
+  resultDict.set("result", r.ValueBuffer())
+  createDistribution = resultDict
+endfunc
+
+qpDescType.set("distribution", "Berechnet einen Verteilschlüssel aus einer gegebenen Tabelle")
+qpDesc.set("distribution",  { &
+    new ItemRecord(true, "table", "ValueBuffer", "Die Tabelle mit der Spalte, aus der der Verteilschlüssel ermittelt werden soll"), &
+    new ItemRecord(true, "column", "String", "Der Spaltenname oder Berechnungsausdruck, aus dem der Verteilschlüssel generiert werden soll"), &
+    new ItemRecord(true, "alias", "String", "Der Aliasname für die Spalte mit dem Verteilungsschlüssel. Dieser Parameter ist optional. Default ist: 'distribution'"), &    
+    new ItemRecord(false, "result", "ValueBuffer", "Die Ergebnistabelle. Sie enthält alle Spalten der ursprünglichen Tabelle plus die Spalte mit dem Verteilungsschlüssel") &
+    })
+
+
+
+function createLoop(String id, DataDict d, DataDict resultDict) : DataDict
+    checkParameterNotNull(resultDict, "", "for, item", null)
+    String item = resultDict.get("item")
+    Reader r = (resultDict.get("for") as ValueBuffer).select(item + " for, %")
+    logInfo("RV: createLoop")
+    while r.next()
+      String name = r.getField(0).getString()
+      dac.addString("result", id + " " + name + " " + r.getRowNo()) 
+      if matches(name, "[0-9]*") then
+         throw runtimeError("Don't use pure numbers in loop as loop-items as they conflict with existing items. This happened in " + id + ", line " + r.getRowNo()) 
+      endif
+      DataDict loop = new DataDict()
+      resultDict.set("this", loop)
+      r.DataDict(loop)
+      ValueBuffer vb = (execute("createInvoice(resultDict, resultDict, name)") as Reader).ValueBuffer()
+      loop.set("invoiceRecordResult", vb)
+      resultDict.remove("this")
+      resultDict.goc(name).set("this", loop)
+    endwhile
+    ValueBuffer vbItems = (resultDict.get("for") as ValueBuffer).select(item + " for, %").ValueBuffer()
+    resultDict.set("itemList", vbItems)
+    createLoop = resultDict
+endfunc
+
+qpDescType.set("loop", "Mit diesem Vorbereitungstyp kann man neue Elemente durch Iteration über eine Tabelle generieren. Der Zugriff auf die Tabellenelemente erfolgt innerhalb der loop-items mit 'this.<colname>'")
+qpDesc.set("loop",  { &
+    new ItemRecord(true, "for", "ValueBuffer", "Die Tabelle, über die iteriert werden soll"), &
+    new ItemRecord(true, "item", "String", "Die Spalte, oder der Ausdruck, der für die Ezeugung der Ergebnisvariablen verwendet wird."), &
+    new ItemRecord(false, "itemList", "ValueBuffer", "Die ursprüngliche Tabelle plus der Spalte mit den Items. Die Spalte heißt 'for' und ist die erste Spalte"), &
+    new ItemRecord(false, "<item>.this", "Dictionary", "Die Ergebnisse der items, die aus dieser Schleife heraus generiert wurden.") &
+    })
+
+
+
+function createLookUp(String id, DataDict d, DataDict resultDict) : DataDict
+    checkParameterNotNull(resultDict, "", "table", null)
+    ValueBuffer vb = resultDict.get("table") as ValueBuffer
+    Object key = resultDict.get("key")
+    Long row = resultDict.get("row")
+    if key = null and row = null then
+        throw runtimeError("neither key nor row is configured for item " + id)
+    endif
+   
+    // optional
+    String keyColumn = resultDict.get("keyColumn")
+    String valueColumn = resultDict.get("valueColumn")
+    if keyColumn = "" or keyColumn = null then
+        keyColumn = vb.getField(0).getName()
+    endif
+    
+    if row != null then
+       if row >= 0 and row < vb.getRecCount() then
+         vb.go(row)
+         resultDict.set("result",  vb.getField(valueColumn).getObject())
+       else
+         resultDict.set("result", null as Object)  
+       endif
+    else
+      if valueColumn = "" or valueColumn = null then
+        valueColumn = vb.getField(1).getString()
+      endif
+      if vb.searchAll(keyColumn + " = key") then
+        resultDict.set("result",  vb.getField(valueColumn).getObject())
+      else
+        resultDict.set("result", null as Object)    
+      endif
+    endif
+    createLookUp = resultDict
+endfunc
+    
+
+qpDescType.set("lookup", "Lesen eines Elementes aus einer Tabelle")
+qpDesc.set("lookup",  { &
+    new ItemRecord(true, "table", "ValueBuffer", "Die Tabelle, aus der ein Wert herausgesucht werden soll"), &
+    new ItemRecord(true, "key", "Any", "Der Schlüssel, der gesucht werden soll. Alternativ kann man mit 'row' auch eine Zeilennummer angeben. Gezählt wird ab 0."), &
+    new ItemRecord(true, "keyColumn", "String", "Die Spalte, in der der Schlüssel gesucht werden soll. Wird dieser Parameter weggelassen, wird Spalte 0 angenommen"), &
+    new ItemRecord(true, "valueColumn", "String", "Die Spalte, in aus der das Ergebnis ausgelesen werden soll. Wird dieser Parameter weggelassen, so wird die zweite Spalte der Tabelle angenommen."), &
+    new ItemRecord(false, "result", "any", "Wird ein Wert gefunden, so speichert dieses Element das Ergebnis") &
+    })
+    
+    
+ValueBuffer vbix
+function getReader(Timestamp ts) : Reader
+   vbix.searchBin("downEqual", ts)
+   getReader = vbix.Reader(vbix.getRecNo(), vbix.getRecNo() + 1)
+endfunc
+
+
+function createQuantityPrice(String id, DataDict d, DataDict resultDict) : DataDict
+    checkParameterNotNull(resultDict, "", "quantity, price", null)
+    
+    ValueBuffer vbQuantity = resultDict.quantity
+    ValueBuffer vbPrice = resultDict.price
+    String tsQuantity = whenString(resultDict.tsQuantity = null, vbQuantity.getField(0).getName(), resultDict.tsQuantity)
+    String tsPrice    = whenString(resultDict.tsPrice = null, vbPrice.getField(0).getName(), resultDict.tsPrice)
+    String aliasQuantity = whenString(resultDict.aliasQuantity = null, "A", resultDict.aliasQuantity)
+    String aliasPrice = whenString(resultDict.aliasPrice = null, "B", resultDict.aliasPrice)
+    
+    vbix = vbPrice.index(tsPrice, "")
+    ValueBuffer vbResult = vbQuantity.Reader().extend(aliasQuantity, format("getReader(%s)", tsQuantity), aliasPrice, false).ValueBuffer()
+    resultDict.set("result", vbResult)
+    
+    createQuantityPrice = resultDict    
+    
+endfunc
+
+qpDescType.set("quantityPrice", "Zusammenstellen einer Tabelle mit Preisen (Stundenwerte) und Mengen (15 min Werte)")
+
+qpDesc.set("quantityPrice",  { &
+    new ItemRecord(true, "quantity", "ValueBuffer", "Die Tabelle mit den Mengen (15-Minuten Werte)"), &
+    new ItemRecord(true, "price", "ValueBuffer", "Die Tabelle mit den Preisen (60-Minuten Werte)"), &
+    new ItemRecord(true, "tsQuantity", "String", "optional: der Name der Spalte mit dem Zeitstempel der quantity Zeitreihe. Default ist der Name der ersten Spalte der quantity Zeitreihe "), &
+    new ItemRecord(true, "tsPrice", "String", "optional: der Name der Spalte mit dem Zeitstempel der price Zeitreihe. Default ist der Name der ersten Spalte der price Zeitreihe "), &
+    new ItemRecord(true, "aliasQuantity", "String", "optional: der Alias-Name für die Ergebnis-Spalten der qantity Zeitreihe. Default ist 'A'"), &
+    new ItemRecord(true, "aliasPrice", "String", "optional: der Alias-Name für die Ergebnis-Spalten der price Zeitreihe. Default ist 'B'"), &
+    new ItemRecord(false, "result", "ValueBuffer", "Die Ergebnistabelle als join aus quantity und price mit den Spalten aus beiden Zeitreihen, mit vorangestelltem Alias-Namen") &
+    })
+
+registerInvoiceItemType("quantityPrice", "createQuantityPrice")

@@ -1,0 +1,35 @@
+include /project/bvag/Configuration.kis
+
+
+String headLine = "Übersicht Limitbericht"
+String h2 = ""
+Reader r
+
+
+function getLink(String name, String absPath) : String
+  getLink = format('<a href="=getFile?name=%s">%s</a>', absPath, name)
+endfunc
+
+
+function webMain(String context) : String
+  File f = new File(conf.limitReportResultPath)
+  r = f.dir("*.*").Reader().sort("lastModified desc").select("lastModified created, getLink(name, absPath) result")
+  String table = templateToString(null, download("/project/bvag/WEB/simpleTable.tpl"))   
+
+  r = System.getLogInfo(1).filter("clientIP = 'LimitReport'").select("when, messageType, message").last(10).sort("when desc")
+  String log = templateToString(null, download("/project/bvag/WEB/simpleTable.tpl"))   
+ 
+  String s = table + "</br>Log Info</br>" + log
+  
+  
+  String frame = download("/project/bvag/WEB/frame.html").readString("utf-8")
+  String result = format(frame, "Limitbericht", "Übersicht Limitbericht", "", s)
+  webMain = result
+endfunc
+
+function getFile(Reader r) : InputStream
+  r.next()
+  File fn = new File(r.value)
+  getFile = fn.InputStream()    
+endfunc
+

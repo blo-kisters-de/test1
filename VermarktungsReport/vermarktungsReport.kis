@@ -1,0 +1,707 @@
+include /project/bvag/pfm.kis
+
+module de.kisters.kiscript.dbmodel.register.Model#B3#b3#/project/bvag/dbmodel.xml
+module de.kisters.kiscript.poi.ssf.SSF
+module de.kisters.kiscript.poi.ssf.sheetreader.SheetReaderBuilder
+
+// String[] productionPrognosisBooks = {"2.2_KWM_E_Prog", "2.1_Mitte_E_Prog", "2.3_GuD_E_Prog", "2.5_MPM_E_Prog"}
+
+struc VMReportPreference
+    Long hpfcOffPeak
+    Long hpfcPeak
+    Long baseYearPrice
+    Long peakYearPrice
+    Long offPeakYearPrice
+    
+    Long baseYearHours
+    Long peakYearHours
+    Long offPeakYearHours
+endstruc
+
+
+VMReportPreference vmRepCFG = new VMReportPreference
+
+ // Offpeak HPFC: (aus Lastgangzerlegung, allgemeine Instanz)
+vmRepCFG.hpfcOffPeak = 2224761
+
+ // Peak HPFC
+vmRepCFG.hpfcPeak = 2224697
+
+vmRepCFG.baseYearPrice = 2430277
+
+vmRepCFG.peakYearPrice = 2430347
+
+vmRepCFG.offPeakYearPrice = 2430375
+
+vmRepCFG.baseYearHours = 2154103
+vmRepCFG.peakYearHours = 2154211
+vmRepCFG.offPeakYearHours = 2154545
+
+
+
+struc Powerplant 
+  String name
+
+  // Benötigte Bücher:
+  // E_Prog
+  // E_Trade (own use usw)
+  
+  // SWP_Prog 
+  // SWP_Trade
+  
+  // Z_Prog
+  // Z_Trade
+  
+  Integer E_Prog
+  Integer[] E_Trade
+  Integer SWP_Prog
+  Integer[] SWP_Trade
+
+  Integer Z_Prog
+  Integer[] Z_Trade
+
+  
+  // Mengengerüst - Vermarktung (Aktuelle Tranche)
+  Long trancheCurrentPerc
+
+  Long electricityBook
+  
+ 
+endstruc
+
+// Ergebnis-Satz des Vermarktungsberichtes
+struc VR_ResultRecord
+    
+   // Namenskonvention 
+   // 1. product: base, peak, offpeak
+   // 2. variable: value, quantity, price, band
+   // 3. prog, open, closed
+   // 4. commodity 
+  String name // Name des Kraftwerkes oder SLV
+  Integer year // Betrachtungsjahr
+  Float baseHours  // Jahressumme der Base Hours
+  Float peakHours  // Jahressumme der Peak Hours
+  Float quantityProg // geplante/prognostizierte Jahresmenge Strom
+  Float offPeakValueProg
+  Float baseValueProg
+  Float peakValueProg    
+
+  Float baseBandProg
+  Float peakBandProg
+  
+  Float offPeakValueOpen // Wert der offenen Positionen
+  Float peakValueOpen    
+  Float baseValueOpen
+  Float valueOpen
+  
+  Float baseBandOpen  // base Band der offenen Positionen
+  Float peakBandOpen
+  Float valueClosed    // tatsächlich gehandelter Wert der geschlossenen Positionen 
+  Float quantityClosed  
+  
+  Float basePrice
+  Float peakPrice
+  Float priceCarbon
+  Float priceZ
+  Float valueProgCarbon
+  Float valueProgZ
+  Float valueClosedCarbon
+  Float valueClosedZ
+  Float valueOpenCarbon
+  Float valueOpenZ
+
+  Float quantityProgCarbon
+  Float quantityProgZ
+  Float quantityClosedCarbon
+  Float quantityClosedZ
+  Float quantityOpenCarbon
+  Float quantityOpenZ
+  
+  Float turnOverProg
+  Float fuelCostProg
+
+  Float DB1
+  Float DB2
+  Float DB3
+  Float plan
+  
+  Float turnOverPerformance
+  Float fuelCostPerformance
+  Float DB1Performance
+  Float DB2Performance
+  Float DB3Performance
+  
+  Float LTP
+  Float Vorteil
+endstruc
+
+
+/**
+ * creates a powerplant object
+ *@param name the name
+ *@param baseName the base name, for example KWM
+ *@param no the no of the pp for example 2.2
+ *@return
+ */
+function Powerplant.create(String name, String baseName, String no) : Powerplant
+    Powerplant result = new Powerplant
+    result.name = name
+    // E Trade
+    B3Book b = new B3Book(baseName)
+    result.E_Trade = new Integer {b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")}
+    // E Prognosis
+    b = new B3Book(no + "_" + baseName + "_E_Prog")
+    result.E_Prog = b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")
+    
+    // SWP Trade
+    b = new B3Book(no + "_" + baseName + "_SWP")
+    result.SWP_Trade = new Integer {b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")}
+    
+    // SWP Prognosis
+    b = new B3Book(no + "_" + baseName + "_SWP_Prog")
+    result.SWP_Prog = b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")
+    
+    // Z Prognosis
+    b = new B3Book(no + "_" + baseName + "_Z_Prog")
+    result.Z_Prog = b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")
+
+    result.Z_Trade = new Integer[2]
+    b = new B3Book(no + "_" + baseName + "_Z_Own")
+    result.Z_Trade[0] = b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")
+    b = new B3Book(no + "_" + baseName + "_Z_Trad")
+    result.Z_Trade[1] = b.select(conf.pfm, "ident_book_l", "").do("ident_book_l")
+    
+    b = new B3Book(no + "_" + baseName + "_E")
+    Reader r = b.getInstance().getParameterList().getTimeseriesList().filter("Timeseries.specification_l = 10014 and tsident_s = 'CYear_Total'").select(conf.pfm, "Instance.Ident eb, Timeseries.ident ts", "")
+    if r.next() then
+       result.trancheCurrentPerc = r.ts
+       result.electricityBook = r.eb
+    endif
+    
+    Powerplant.create = result
+endfunc
+
+Powerplant mehrum = new Powerplant("Mehrum", "KWM", "2.2")
+Powerplant hkwMitte = new Powerplant("HKW_Mitte", "Mitte", "2.1")
+Powerplant gud = new Powerplant("GuD", "GuD", "2.3")
+
+
+/**
+Powerplant mehrum = new Powerplant("Mehrum", "2.2_KWM_E_Prog", {"KWM"}, 4485323,  2112726, "2.2_KWM_SWP")
+Powerplant hkwMitte = new Powerplant("HKW_Mitte", "2.1_Mitte_E_Prog", {"Mitte"}, -1, -1,"") 
+Powerplant gud = new Powerplant("GUD", "2.3_GuD_E_Prog", {"GuD"}, -1, -1, "")
+*/
+
+
+
+Powerplant[] powerplants = {mehrum, hkwMitte, gud}
+
+
+/*
+function getProductionPlanBook(String shortName) : B3Book
+  B3Book book = new B3Book(shortName)
+  getProductionPlanBook = book
+endfunc
+
+function getProductionPlanDeals(String bookShortname) : B3Deal
+  B3Deal deal = new B3Deal()
+  deal = getProductionPlanBook(bookShortname).getDealList()
+  getProductionPlanDeals = deal
+endfunc
+*/
+
+/*
+function getDealsClosedPositions(String[] closedPosBooks) : B3Deal
+   B3Book b = new B3Book()
+   String bookFilter = pattern("shortname_book_s = '%s'", " or shortname_book_s = '%s'", arrayAsReader(closedPosBooks))
+   b = b.filter(bookFilter)
+   getDealsClosedPositions = b.getDealList()
+endfunc
+*/
+
+function getProductionPlan(String tsList, Timestamp tsFrom, Timestamp tsUntil) : ValueBuffer
+  String[] tsListArr = split(tsList, ",")
+  ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").select("ts, 0.0f quantity").ValueBuffer()
+  Reader r = arrayAsReader(tsListArr)
+  Reader r1
+  Reader r2
+  Reader result
+  while r.next()
+    result = vbTS.Reader()
+    r1 = getTimeseriesValues66(conf.pfm, vall(trim(r.value)), tsFrom, tsUntil)
+    r2 = r1.groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.ts, value D.quantity")
+    result = result.extend(r2, null, "ts = " + r2.getField(0).getName())
+    vbTS = result.select("ts, quantity + if(D.quantity=null, 0f, D.quantity) quantity").ValueBuffer()
+    r1.close()               
+  endwhile
+  getProductionPlan = vbTS
+endfunc
+
+/*
+// Aktuellste PFC:
+function getPrices(Timestamp tsFrom, Timestamp tsUntil) : ValueBuffer
+  getPrices = getTimeseriesValues66(conf.pfm, vmRepCFG.currentHPFC , tsFrom, tsUntil).ValueBuffer()
+endfunc
+*/
+
+Reader debug
+
+function r(String n, Integer c) : String
+  String n1
+  if startsWith(n, "res.") then
+    n1 = mid(n,5)
+  else
+    n1 = n    
+  endif  
+  r = format(",round(%1$s,%2$d) %3$s", n, c, n1)  
+endfunc
+
+function r0(String n) : String
+  r0 = r(n,0)
+endfunc
+
+// private
+function fillDataDict(DataDict d, SSFSheet s) : Integer
+  ValueBuffer vb = s.readTable().vertically().beginningAtCell(0, 0).columnsByStructure("String key, String unit, Float value").recordsTake(30).asReader().filter("key != null and value != null").ValueBuffer()
+  vb.do("d.set(key, value)")
+  d.set("cost_vb", vb)  
+endfunc
+
+// private
+function getPPDataDict(DataDict d, String name) : DataDict
+   DataDict dpp = d.get(name)
+   if dpp = null then
+      dpp = new DataDict()
+      d.set(name, dpp)
+   endif
+   getPPDataDict = dpp
+endfunc
+
+// private
+function getStartCost(Integer year, InputStream xlsx) : Float
+  SSFWorkbook wb = SSFWorkbook.createXSSFWorkbook(xlsx)
+  let sheet = wb.getSheet(stri(year))
+  if (sheet <> null) then
+    getStartCost = sheet.readSheetVertically(series("x", 0, 0, -1).select("0.0f start").desc(), 2, 5, "row.getCell(5) != null", false, false, false).last(1).do("start")
+  else
+    getStartCost = null
+  endif  
+  wb.close()
+endfunc
+
+
+
+function getFixCost(DataDict d, Integer year) : Integer
+  SSFWorkbook wb = SSFWorkbook.createXSSFWorkbook(download("/project/bvag/VermarktungsReport/Parameter/Plan.xlsx"))
+  SSFSheet sheet = wb.getSheet(stri(year))
+  if (sheet != null) then
+    Reader r = sheet.readTable().beginningAtCell(0, 0).columnsByStructure("String pp, String what, Float value").allRecords().asReader().select("Value.current(pp, pp <> null) pp, what, value")
+
+  
+    while r.next()
+      DataDict d1
+      String pp
+      if r.pp = "SLV" then
+        pp = "SLV"
+      else
+        pp = r.pp
+      endif
+      d1 = getPPDataDict(d, r.pp)
+      d1.setFloat(r.what, r.value)
+    endwhile
+  endif
+endfunc
+
+
+
+/**
+ * Ermittelt die Kostenfaktoren aus dem EXCEL Sheet VaR gilt nur für ein Jahr? 
+ *@return 
+ */
+function getCostTables(Integer year) : DataDict
+  DataDict result = new DataDict()
+  Float startCost = getStartCost(year, download("/project/bvag/VermarktungsReport/Parameter/Kennzahlen_Mehrum.xlsx"))
+  DataDict d = getPPDataDict(result, "Mehrum")
+  d.set("startCost", startCost)
+  
+  startCost = getStartCost(year, download("/project/bvag/VermarktungsReport/Parameter/Kennzahlen_VPP.xlsx"))
+  d = getPPDataDict(result, "VPP")
+  d.set("startCost", startCost)
+  
+  
+  SSFWorkbook wb = SSFWorkbook.createXSSFWorkbook(download("/project/bvag/VermarktungsReport/Parameter/Spread_Faktoren.xlsx"))
+  fillDataDict(getPPDataDict(result, "Mehrum"), wb.getSheet("Mehrum"))
+  fillDataDict(getPPDataDict(result, "VPP"), wb.getSheet("SLV"))
+  fillDataDict(getPPDataDict(result, "GuD"), wb.getSheet("GuD"))
+  
+  getFixCost(result, year)
+  
+  getCostTables = result
+  wb.close()
+endfunc
+
+
+
+function getPPMarketPosition(Powerplant pp, Integer year) : Reader
+ 
+ Timestamp tsFrom = date(year, 1, 1)
+ Timestamp tsUntil = date(year + 1, 1,1)   
+    
+ VR_ResultRecord res = new VR_ResultRecord
+ res.name = pp.name
+ res.year = year
+    
+    
+ // Offpeak HPFC:
+ // 2224761   
+ 
+ // Peak HPFC
+ // 2224697
+ 
+ //Off-Peak-Preis als HPFC-Werte für Off-Peak-Stunden:
+ ValueBuffer offPeakpreis = getTimeseriesValues66(conf.pfm, vmRepCFG.hpfcOffPeak, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+
+// Peak-Preis als HPFC-Werte für Peak-Stunden:
+ ValueBuffer peakpreis = getTimeseriesValues66(conf.pfm, vmRepCFG.hpfcPeak, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+
+// Prognose-Geschäfte:
+ String tsList = pattern("%s", (new B3Book(pp.E_Prog)).getDealList().getProduct().getCommodity().select(conf.pfm, "Deal.ident", "").select("get5000TS(ident) quantityTS"))
+
+// Lastgang der Prognose-Geschäfte:
+ ValueBuffer menge = getProductionPlan(tsList, tsFrom, tsUntil)
+
+// Off-Peak-Wert als Aggregation (Lastgang der Prognose-Geschäfte) * (Off-Peak-Preis)
+// Float offPeakWert = Reader.joinCol(offPeakpreis, "p", menge, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+ res.offPeakValueProg = Reader.joinCol(offPeakpreis, "p", menge, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+
+// Peak-Wert als Aggregation (Lastgang der Prognose-Geschäfte) * (Peak-Preis)
+ //Float peakWert = Reader.joinCol(peakpreis, "p", menge, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+ res.peakValueProg = Reader.joinCol(peakpreis, "p", menge, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+ 
+ // Menge der Prognose-Geschäfte als Gesamtmenge der Prognose-Geschäfte:
+ //Float summeProgQuantity = menge.aggregate("total(quantity) q", "").do("q")
+ res.quantityProg = menge.aggregate("total(quantity) q", "").do("q")
+
+// Off-Peak-Preis von 1MW (=Summe aller Off-Peak-Stundenpreise der HPFC:
+ Float summeOffPeakPrice =  offPeakpreis.aggregate("total(value) value", "").do("value")/4
+
+// Peak-Preis von 1MW (=Summe aller Peak-Stundenpreise der HPFC:
+ Float summePeakPrice =     peakpreis.aggregate("total(value) value", "").do("value")/4
+
+// Base-Band des Fahrplans =(Off-Peak-Wert) / (Off-Peak-Preis von 1MW)
+ //Float baseBandSpecPower =  offPeakWert / summeOffPeakPrice
+ res.baseBandProg =  res.offPeakValueProg / summeOffPeakPrice
+  
+ // Peak-Band des Fahrplans =(Peak-Wert) / (Peak-Preis von 1MW) - (Base-Band des Fahrplans)
+ //Float peakBandSpecPower =  peakWert / summePeakPrice - baseBandSpecPower
+ res.peakBandProg =  res.peakValueProg / summePeakPrice - res.baseBandProg
+
+// Jahressumme der Base-Stunden: 
+ // Float baseHours = getTimeseriesValues66(conf.pfm, vmRepCFG.baseYearHours, tsFrom, tsUntil).do("value0_fl")
+ res.baseHours = getTimeseriesValues66(conf.pfm, vmRepCFG.baseYearHours, tsFrom, tsUntil).do("value0_fl")
+// Jahressumme der Peak-Stunden:
+ // Float peakHours = getTimeseriesValues66(conf.pfm, vmRepCFG.peakYearHours, tsFrom, tsUntil).do("value0_fl")
+ res.peakHours = getTimeseriesValues66(conf.pfm, vmRepCFG.peakYearHours, tsFrom, tsUntil).do("value0_fl")
+// Geschlossene Jahresarbeit Base = (Geschlossene Base-Leistung)* (Jahressumme der Base-Stunden):
+// Float currentBaseWork = currentBaseTranche * res.baseHours
+
+
+ 
+ // Geschlossene Jahresarbeit Peak = (Geschlossene Peak-Leistung)* (Jahressumme der Peak-Stunden):
+// Float currentPeakWork = currentPeakPower * res.peakHours
+ 
+ // Bestimmung der geschlossenen Positionen aus Geschäften:
+ B3Book b = new B3Book(pp.E_Trade[0])
+ 
+ //Saldo-Zeitreihe der Vermarktungsgeschäfte eines Kraftwerks für ein Jahr (Kauf-Positiv, Verkauf – negativ):
+ Reader r = b.getDealList().select(conf.pfm, "Deal.*","").extend(null, "getAggregatedValues(deal.ident, deal.pricevl_l, deal.fixedpricepermwh_fl, deal.start_ts, deal.end_ts, deal.start_ts >= tsFrom and deal.end_ts <= tsUntil, deal.worthinmwh_fl, deal.worth_fl)", null, true)
+ r = r.aggregate("total(whenFloat(deal.buy_si = 1, quantity, -quantity)) quantity, total(whenFloat(deal.buy_si = 1,-cost, cost)) value","")
+ r.next()
+ 
+ //Saldo-Menge der Vermarktungsgeschäfte eines Kraftwerks für ein Jahr 
+ // Float closedWork = r.quantity
+ res.quantityClosed = r.quantity
+ //Saldo-Wert der Vermarktungsgeschäfte eines Kraftwerks für ein Jahr 
+ //Float closedValue = r.value
+ res.valueClosed = r.value
+
+ /////////
+ // Beginn Verarbeitung deoffenen Positionen Strom
+
+B3Book eb = new B3Book(pp.electricityBook)
+Integer saldoID = eb.getInstance().getParameterList().getTimeseriesList().filter("Timeseries.specification_l = 5105").select(conf.pfm, "Timeseries.ident, Timeseries.name_s", "").do("ident")
+
+
+ menge = getTimeseriesValues66(conf.pfm, saldoID, tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts ts, value quantity").ValueBuffer()
+ 
+// Off-Peak-Wert als Aggregation (Lastgang des Saldos) * (Off-Peak-Preis)
+ Float res.offPeakValueOpen = Reader.joinCol(offPeakpreis, "p", menge, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+
+// Peak-Wert als Aggregation (Lastgang des Saldos) * (Peak-Preis)
+ Float res.peakValueOpen = Reader.joinCol(peakpreis, "p", menge, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+ 
+ // Saldo als Gesamtmenge des Saldos:
+//  Float summeSaldoQuantity = menge.aggregate("total(quantity) q", "").do("q")
+ res.quantityClosed = menge.aggregate("total(quantity) q", "").do("q")
+
+// Base-Band des Saldos =(Off-Peak-Wert) / (Off-Peak-Preis von 1MW)
+ res.baseBandOpen =  res.offPeakValueOpen / summeOffPeakPrice
+ 
+ // Peak-Band des Saldo =(Peak-Wert) / (Peak-Preis von 1MW) - (Base-Band des Fahrplans)
+ res.peakBandOpen =  res.peakValueOpen / summePeakPrice - res.baseBandOpen
+ 
+ 
+
+
+ // Base Arbeit vom Saldo (baseBand * Base Stunden)
+ Float baseQuantityOpen = res.baseBandOpen * res.baseHours
+
+ // Peak Arbeit vom Saldo (PeakBand * Peak Stunden)
+ Float peakQuantityOpen = res.peakBandOpen * res.peakHours
+
+ Integer priceInstance = eb.select(conf.pfm, "Book.ident_price_l", "").do("ident_price_l")
+
+ res.basePrice = getCalPrice(priceInstance, now(), "Base", year)
+ res.peakPrice = getCalPrice(priceInstance, now(), "Peak", year)
+
+ res.baseValueProg = res.peakBandProg * res.baseHours * res.basePrice
+
+ 
+ // Wert von Base Open
+ res.baseValueOpen = baseQuantityOpen * res.basePrice
+ // Wert von Peak Saldo
+ res.peakValueOpen = peakQuantityOpen * res.peakPrice
+ 
+ res.valueOpen = res.baseValueOpen + res.peakValueOpen 
+
+
+ // Kohle
+ // Prognosis
+ res.quantityProgCarbon = getDealsBounded(pp.SWP_Prog, tsFrom, tsUntil, null).aggregate("quantity", "").do("quantity")
+ // Kohle geschlossen
+
+ r = getDealsBounded(pp.SWP_Trade[0], tsFrom, tsUntil, null).aggregate("total(quantity * whenFloat(buy_si=1, -1, 1)) quantity, total(cost * whenFloat(buy_si=1, -1, 1)) cost", "")
+ if (r.next()) then
+   res.valueClosedCarbon = r.cost
+   res.quantityClosedCarbon = r.quantity
+ endif 
+
+ res.priceCarbon = getCoalPrice(year, now())
+ res.quantityOpenCarbon = res.quantityProgCarbon - res.quantityClosedCarbon
+ res.valueOpenCarbon = res.quantityOpenCarbon * res.priceCarbon
+
+
+ // Kohlendioxid
+ // Prognosis
+ res.quantityProgZ = getDealsBounded(pp.Z_Prog, tsFrom, tsUntil, null).aggregate("quantity", "").do("quantity")
+ 
+
+ r = getDealsBounded(pp.Z_Trade[0], tsFrom, tsUntil, null).aggregate("total(quantity * whenFloat(buy_si=1, -1, 1)) quantity, total(cost * whenFloat(buy_si=1, -1, 1)) cost", "")
+ if (r.next()) then
+   res.valueClosedZ = r.cost
+   res.quantityClosedZ = r.quantity
+ endif 
+ 
+ res.priceZ = getCarbonDioxidePrice(year)
+ res.quantityOpenZ = res.quantityProgZ - res.quantityClosedZ
+ res.valueOpenZ = res.priceZ * res.quantityOpenZ
+
+ res.valueProgZ = res.priceZ * res.quantityProgZ
+
+
+ // Umsatzerlöse Strom berechnen als 
+ // (Base Band der Prognose Strom) * (Stundenzahl Base) * M2M_Base  + 
+ // (Peak Band der Prognose Strom) * (Stundenzahl Peak) * M2M_Peak
+ // (Mit M2M als Marktpreise)
+ res.turnOverProg = res.offPeakValueProg + res.peakValueProg
+ 
+ // 16.	Brennstoffkosten (geschl. + offen) berechnen als
+ // (Kohle_Prognosemenge) * M2M_Kohle + (CO2_Prognosemenge) * M2M_CO2
+ res.fuelCostProg = res.valueProgZ + res.valueProgCarbon
+  
+ // 17.	DB 1 (absicherbare Positionen) ermitteln als
+ // Umsatzerlöse Strom + Brennstoffkosten (geschl. + offen)
+ res.DB1 = res.turnOverProg - res.fuelCostProg
+
+ DataDict costFactors = getCostTables(year)
+
+ // Kostenfaktoren aus em EXCEL Sheet holen
+ DataDict factors = costFactors.get(pp.name)
+ 
+ if (factors != null) then
+   // 18.	Transportkosten ermitteln als
+   // Transport (Datei „VaR_2018.xlsm“, Blatt „Konstanten, Tabelle für Mehrum) * Kohle_Prognosemenge
+   Float transport = factors.Transport * res.quantityProgCarbon
+   
+   Float anteilKostenBetriebsmittel = factors.getFloat("Anteil Kosten Betriebsmittel") * (transport + res.valueProgCarbon)
+   
+   Float startCost = factors.getFloat("startCost")
+   
+   res.DB2 = res.DB1 - anteilKostenBetriebsmittel - startCost
+   
+   Float fixCost = factors.Fixkosten // variable aus EXCEL Sheet
+   
+   res.DB3 = res.DB2 - fixCost
+   
+   res.plan = factors.Plan
+ endif  
+
+ //26.	Umsatzerlöse Strom (geschl. + offen) ermitteln als
+ // Umsatzerlöse Strom (geschlossen) + Umsatzerlöse Strom (offen)
+ // und folgende
+ res.turnOverPerformance = res.baseValueOpen + res.peakValueOpen + res.valueClosed
+ res.fuelCostPerformance = res.valueClosedCarbon + res.valueClosedZ + res.valueOpenCarbon + res.valueOpenZ
+ res.DB1Performance = res.turnOverPerformance - res.fuelCostPerformance
+ res.DB2Performance = res.DB1Performance - transport - anteilKostenBetriebsmittel - startCost
+ res.DB3Performance = res.DB2Performance - fixCost
+ res.LTP = res.DB3Performance - res.plan
+ res.Vorteil = res.DB3Performance - res.DB3
+
+
+
+
+ String resultSel = "pp.name name, year" + r0("res.baseHours")+ r0("res.peakHours")+ r0("res.quantityProg")+ r0("res.offPeakValueProg")+ &
+     r0("res.baseValueProg")+ r0("res.peakValueProg")+ r0("res.baseBandProg")+ r0("res.peakBandProg")+ r0("res.offPeakValueOpen")+ &
+     r0("res.peakValueOpen")+ r0("res.baseValueOpen")+ r0("res.baseBandOpen")+ r0("res.peakBandOpen")+ r0("res.valueClosed")+ r0("res.quantityClosed")+ &
+     r0("res.basePrice")+ r0("res.peakPrice")+ r0("res.priceCarbon")+ r0("res.priceZ")+ r0("res.valueProgCarbon")+ r0("res.valueProgZ")+ r0("res.valueClosedCarbon")+ &
+     r0("res.valueClosedZ")+ r0("res.valueOpenCarbon")+ r0("res.valueOpenZ")+ r0("res.quantityProgCarbon")+ r0("res.quantityProgZ")+ r0("res.quantityClosedCarbon")+ &
+     r0("res.quantityClosedZ")+ r0("res.quantityOpenCarbon")+ r0("res.quantityOpenZ")+ r0("res.turnOverProg")+ r0("res.fuelCostProg")+ r0("res.DB1")+ r0("res.DB2")+ &
+     r0("res.DB3")+ r0("res.plan")+ r0("res.turnOverPerformance")+ r0("res.fuelCostPerformance")+ r0("res.DB1Performance")+ r0("res.DB2Performance")+ &
+     r0("res.DB3Performance")+ r0("res.LTP")+ r0("res.Vorteil")
+ 
+ getPPMarketPosition = series("x",0,0,1).select(resultSel)
+ 
+ 
+ 
+ 
+endfunc
+
+/**
+ * berechnet den Dark Spread für Mehrum
+ * @param current der Zeitstempel mit dem Bezugsdatum
+ * @param r der Reader mit dem Datensatz des Kraftwerks, für dass die Werte ermittelt werden sollen
+ *@return [0] = auf Basis der Marktpreise,  [1] auf Basis der geschlossenen Positionen + Marktpreise
+ */
+function getMehrumSpread(Timestamp current, Reader r) : Float[]
+  Float[] result = new Float[2]
+  getMehrumSpread = result
+  Integer year = r.year
+  Float coalPrice = getCoalPrice(year, current)
+  Float co2Price = getCarbonDioxidePrice(year)
+  SSFWorkbook wb = SSFWorkbook.createXSSFWorkbook(download("/project/bvag/VermarktungsReport/Parameter/CDS-Rechner_opt.xlsx"))
+  SSFSheet sheet = wb.getSheet(r.name)
+  if sheet <> null then
+    SSFRow row = sheet.getRow(6)
+    Integer c = 3
+    Float transport = row.getCell(c).getNumericCellValue()
+    c = c + 1
+    Float waermeMengeBezugskohle = row.getCell(c).getNumericCellValue()
+    c = c + 1
+    Float waermeMengeAPIKohle    = row.getCell(c).getNumericCellValue()
+    c = c + 1
+    Float energieGehalt          = row.getCell(c).getNumericCellValue()
+    c = c + 1
+    Float wirkungsgrad           = row.getCell(c).getNumericCellValue()
+    c = c + 1
+    Float anteilKostenBetrieb    = row.getCell(c).getNumericCellValue()
+    c = c + 1
+    Float anteilCO2              = row.getCell(c).getNumericCellValue()
+    Integer yearSpan = year - r.year
+    if (yearSpan < 0) then 
+        yearSpan = 0
+    endif
+    // Marktpreis
+    result[0] = (coalPrice + transport * 1.02 ^ yearSpan) * waermeMengeBezugskohle /  (waermeMengeAPIKohle * energieGehalt * wirkungsgrad) * (1 + anteilKostenBetrieb * 1.02 ^ yearSpan) + anteilCO2 * co2Price
+
+    // bisher realisierter Preis + offene Positionen
+    Float coalMarket = (r.valueClosedCarbon + r.quantityOpenCarbon * coalPrice) / (r.quantityClosedCarbon + r.quantityOpenCarbon)
+    Float co2Market =  (r.valueClosedZ + r.quantityOpenZ * co2Price) / (r.quantityClosedZ + r.quantityOpenZ)
+    
+    result[1] = (coalMarket + transport * 1.02 ^ yearSpan) * waermeMengeBezugskohle /  (waermeMengeAPIKohle * energieGehalt * wirkungsgrad) * (1 + anteilKostenBetrieb * 1.02 ^ yearSpan) + anteilCO2 * co2Market    
+  endif
+endfunc
+
+/**
+ * berechnet den Dark Spread für GuD
+ * @param current der Zeitstempel mit dem Bezugsdatum
+ * @param r der Reader mit dem Datensatz des Kraftwerks, für dass die Werte ermittelt werden sollen
+ *@return [0] = auf Basis der Marktpreise,  [1] auf Basis der geschlossenen Positionen + Marktpreise
+ * Achtung: Spalte bidAskSpread ist zweimal im sheet enthalten
+ */
+function getGuDSpread(Timestamp current, Reader r) : Float[]
+  Float[] result = new Float[2]
+  getGuDSpread = result
+  Integer year = r.year
+  Float coalPrice = getCoalPrice(year, current)
+  Float co2Price = getCarbonDioxidePrice(year)
+  Float gasPrice = null
+  SSFWorkbook wb = SSFWorkbook.createXSSFWorkbook(download("/project/bvag/VermarktungsReport/Parameter/CDS-Rechner_opt.xlsx"))
+  SSFSheet sheet = wb.getSheet(r.name)
+  if sheet <> null then
+    SSFRow row = sheet.getRow(4)
+    Integer c = 3
+    Float gasPreis = row.getCell(c).getNumericCellValue()    
+    c = c + 1
+    Float bidAskSpread = row.getCell(c).getNumericCellValue()    
+    c = c + 1
+	Float inflation = row.getCell(c).getNumericCellValue() 
+    c = c + 1
+	Float halteDauer = row.getCell(c).getNumericCellValue() 
+    c = c + 1
+	Float co2Faktor = row.getCell(c).getNumericCellValue() 
+	c = c + 1
+	c = c + 1 // Preis überspringen
+	c = c + 1 // doppelter bidAskSpread überspringen
+	
+    Float wirkungsgrad = row.getCell(c).getNumericCellValue() 
+	c = c + 1
+    Float betriebsmittel = row.getCell(c).getNumericCellValue() 
+	c = c + 1
+    Integer yearSpan = year - r.year
+    if (yearSpan < 0) then 
+        yearSpan = 0
+    endif
+    // Marktpreis
+    result[0] = ((gasPrice + bidAskSpread) / 0.902 + (1*(1+inflation)^(halteDauer)+co2Faktor*(co2Price + bidAskSpread))) / wirkungsgrad * (1 + betriebsmittel*(1+inflation)^(halteDauer))
+
+
+    // bisher realisierter Preis + offene Positionen
+//     Float coalMarket = (r.coalQuantityTrade * r.coalValueTrade + r.coalOpen * coalPrice) / (r.coalQuantityTrade + r.coalOpen)
+
+    Float co2Market =  (r.ZQuantityTrade * r.ZValueTrade + r.ZOpen * r.ZPrice) / (r.ZQuantityTrade + r.ZOpen)
+    result[1] = ((gasPrice + bidAskSpread) / 0.902 + (1*(1+inflation)^(halteDauer)+co2Faktor*(co2Market + bidAskSpread))) / wirkungsgrad * (1 + betriebsmittel*(1+inflation)^(halteDauer))
+
+    
+//     result[1] = (coalMarket + transport * 1.02 ^ yearSpan) * waermeMengeBezugskohle /  waermeMengeAPIKohle * energieGehalt * wirkungsgrad * (1 + anteilKostenBetrieb * 1.02 ^ yearSpan) + anteilCO2 * co2Market    
+  endif
+endfunc
+
+function getSpread(Reader r) : Reader
+  static ValueBuffer vb = series("x", 0, 0, 1).select("null as Float darkMarket, null as Float darkActual, null as Float sparkMarket, null as Float sparkActual").ValueBuffer()
+  Float[] result = null
+  Reader resultReader = null
+  if (r.name = 'Mehrum') then
+     result = getMehrumSpread(now(), r)
+     resultReader = series("x", 0, 0, 1).select("result[0] darkMarket, result[1] darkActual, null as Float sparkMarket, null as Float sparkActual")
+  elseif r.name = 'GuD' then
+     result = getGuDSpread(now(), r)
+     resultReader = series("x", 0, 0, 1).select("result[0] darkMarket, result[1] darkActual, null as Float sparkMarket, null as Float sparkActual")
+  else
+     resultReader = vb.Reader()
+  endif   
+  getSpread = resultReader
+endfunc
+
+function testReport() : Reader
+ Reader r
+ Integer i
+ for i = 2017 to 2020 step 1
+  r = r + getPPMarketPosition(mehrum, i) 
+  r = r + getPPMarketPosition(gud, i) 
+  r = r + getPPMarketPosition(hkwMitte, i) 
+ next
+ testReport = r.extend(null, "getSpread(this)", null, false)
+endfunc
+
+// getPPMarketPosition(mehrum, 2017).extend(null, "getSpread(this)", null, false)
+// r.desc()

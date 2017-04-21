@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Query>
+	<table>
+		<tableElement theUserName="Book" aTable="v_sd_book"
+			aID="ident_book_l" aName="shortname_book_s" />
+		<tableElement theUserName="Deal" aTable="deal"
+			aID="ident"  />
+		<tableElement theUserName="TradePartner" aTable="tradepartner"
+			aID="ident"  aName="participant_name_s" />
+		<tableElement theUserName="AllocInstance" aTable="allocinstance"
+			aID="ident"  />
+		<tableElement theUserName="Commodity" aTable="commodity"
+		    aID="ident"  />
+		<tableElement theUserName="Product" aTable="product"
+		    aID="ident"  />
+		<tableElement theUserName="Instance" aTable="stationbase"
+		    aID="ident"  aName="mstnr_s" />
+		<tableElement theUserName="InstanceType" aTable="versiontable"
+		    aID="tabid_l"  aName="name_s" />
+		<tableElement theUserName="Parameter" aTable="entrypara"
+		    aID="ident"  aName="name_s" />
+		<tableElement theUserName="Timeseries" aTable="ts_valuelist"
+		    aID="ident"  aName="name_s" />
+		<tableElement theUserName="HistUserField" aTable="wk_histuserfields"
+		    aID="ident"  aName="fieldname_s" />
+		<tableElement theUserName="HistUserFieldValue" aTable="wk_histuserfieldvalues"
+		    aID="ident"  />
+		<tableElement theUserName="HistUserFieldAttribute" aTable="mn_histuserfields"
+		    aID="ident"  />
+		<tableElement theUserName="Specification" aTable="specifications"
+		    aID="specification_l" aName="name_s" />
+	</table>
+	<link>
+		<linkElement parent="v_sd_book" child="allocinstance" parentCol="parent_l">
+		   <linkElement parent="deal" child="allocinstance" parentCol="child_l" />
+		</linkElement>
+		<linkElement parent="commodity" child="product" parentCol="commodity_l"/>
+		<linkElement parent="product" child="deal" parentCol="productident_l"/>
+  	    <linkElement parent="stationbase" child="deal" parentCol="ident"/>
+  	    <linkElement parent="versiontable" child="stationbase" parentCol="table_no_l"/>
+  	    <linkElement parent="stationbase" child="entrypara" parentCol="mst_l"/>
+  	    <linkElement parent="versiontable" child="entrypara" parentCol="table_l"/>
+  	    <linkElement parent="entrypara" child="ts_valuelist" parentCol="stationchannel_l"/>
+  	    <linkElement parent="stationbase" child="v_sd_book" parentCol="ident_book_l"/>
+  	    <linkElement parent="stationbase" child="tradepartner" parentCol="ident"/>
+  	    <linkElement parent="v_sd_book" child="v_sd_book" parentCol="ident_parent_l" theNameFromParent="Parent" theNameFromChild="Child" />
+  	    <linkElement parent="versiontable" child="wk_histuserfields" parentCol="instancetyp_l"/>
+  	    <linkElement parent="wk_histuserfields" child="wk_histuserfieldvalues" parentCol="field_l"/>
+        <linkElement parent="stationbase" child="mn_histuserfields" parentCol="instanceident_l"/> 
+        <linkElement parent="wk_histuserfields" child="mn_histuserfields" parentCol="field_l"/> 
+        <linkElement parent="wk_histuserfieldvalues" child="mn_histuserfields" parentCol="value_l"/>                  	      	    
+        <linkElement parent="specifications" child="ts_valuelist" parentCol="specification_l"/>                  	      	    
+    </link>
+
+</Query>

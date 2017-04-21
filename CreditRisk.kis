@@ -1,0 +1,54 @@
+
+function CreditRisk.getList() : Reader
+    CreditRisk.getList = Reader.create(download("/project/bvag/creditRisk.rd"))
+endfunc
+
+function private_setup(ValueBuffer vb, String what) : DataDict
+  DataDict d = new DataDict()
+  String f = "LongTerm" + what
+  vb.filter(f + " <> null").do("d.set(" + f + ", Rate)")
+  private_setup = d    
+endfunc
+
+function private_initAll(DataDict mood, DataDict sp, DataDict fitch) : DataDict
+  DataDict all = new DataDict()   
+  all.set("Mood", mood)
+  all.set("SP", sp)
+  all.set("fitch", fitch)
+  private_initAll = all
+endfunc
+
+
+function getRisk(String who, String rate) : Float
+  static ValueBuffer vb = Reader.create(download("/project/bvag/creditRisk.rd")).ValueBuffer()
+  static DataDict mood = private_setup(vb, "Mood")
+  static DataDict SP = private_setup(vb, "SP")
+  static DataDict fitch = private_setup(vb, "Fitch")
+  static DataDict initAll = private_initAll(mood, SP, fitch)
+  
+  if who = "" or who = null or rate = "" or rate = null then
+      getRisk = null
+  else
+    DataDict d = initAll.get(who)
+    if d = null then
+       throw runtimeError("Don't know credit risk " + who)
+    endif
+    Float fRate = d.get(rate)
+    if fRate = null then
+       throw runtimeError(format("CreditRisk: rate %s not known for %s", rate, who))
+    endif
+    getRisk = fRate
+  endif
+endfunc
+
+function test() : Integer
+    Integer i
+    Timestamp ts = now()
+    for i = 1 to 1000000 step 1
+    next
+    Long duration = now() - ts    
+    for i = 1 to 1000000 step 1
+      getRisk("Mood", "Ba1")
+    next
+    duration = now() - ts - duration
+endfunc

@@ -1,0 +1,20 @@
+
+API api = new API()
+api.addFunction("testReport()")
+
+Session.setAPI(api)
+
+
+System.addApplication("/project/bvag/VermarktungsReport/vermarktungsReport.kis")
+System.addUser("test", "testPassWord")
+
+
+Roles 
+Administrator: (no restrictions)
+User : use, compileExecute, prepare, executePrepare (all Writer functions)
+
+
+For all users we can determine, which files he can "use"
+
+
+

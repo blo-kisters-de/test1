@@ -1,0 +1,150 @@
+module de.kisters.kiscript.json.Json
+
+include /project/bvag/pfm.kis
+
+struc DealClass
+    Integer id
+    String name
+endstruc
+
+function r2json(Reader r) : String
+  r2json = JsonConversion.fromReader(r, null)  
+//  JsonValue v = JsonValue.createArray(r)
+//  r2json = v.asString()
+endfunc
+
+
+function dealClasses(Reader r) : String
+   DealClass[] all = { &
+     new DealClass(1, "Forward"), &
+     new DealClass(2, "Spotmarkt"),&
+     new DealClass(3,"Ausgleichsenergie"), &
+     new DealClass(4,"Energietransfer zwischen Büchern (Spotmarkt)"), &
+     new DealClass(6,"Verbrauchsprognose"), &
+     new DealClass(7, "Einspeiseprognose"), &
+     new DealClass(8, "Energietransfer zwischen Büchern"), &
+     new DealClass(10, "Futures"), &
+     new DealClass(12, "Bilanzierung"), &
+     new DealClass(14, "Intraday / Yesterday"), &
+     new DealClass(27, "Swap (fixed for floating)"), &
+     new DealClass(28, "Swap (hausintern)"), &
+     new DealClass(30, "Monetär"), &
+     new DealClass(33, "Zertifikat Future (Termin)"), &
+     new DealClass(35, "Zertifikat Future (hausintern)"), &
+     new DealClass(37, "CO2-Ausspeiseprognose")}
+     dealClasses = r2json(arrayAsReader(all))
+endfunc
+
+
+function webMain(String context) : String
+    webMain = download("/project/bvag/WEB/main.html").readString("utf-8")
+endfunc
+
+ValueBuffer vbDeals
+
+
+
+
+
+function getDeals(Reader r) : String
+  DataDict d  = new DataDict()
+  r.do("d.set(key,value)")    
+  String startTS = d.get("startTS")
+  String endTS = d.get("endTS")
+  String dealClasses = d.get("selectedDealClasses")
+  if (dealClasses = null or dealClasses = "" or dealClasses = "[]") then
+    excludedDealClass = new Long[0]
+  else
+    Reader dc = JsonConversion.toReader(dealClasses).select("id")
+    String dcList = pattern("%s", dc)
+    excludedDealClass = execute("new Long {" + dcList + "}")
+  endif
+  Timestamp tsFrom = new Timestamp(startTS)
+  Timestamp tsUntil = new Timestamp(endTS)
+  vbDeals = getDeals(tsFrom, tsUntil, null)
+  
+  DataDict d1 = new DataDict()
+  conf.pfm.select("ident, name_s from wk_dealclass").do("d1.set(stri(ident), name_s)")
+  let tp = new DataDict()
+  conf.pfm.select("ident, participant_name_s from tradepartner").do("tp.set(stri(ident), participant_name_s)")
+  vbDeals = vbDeals.Reader().filter("cost <> null and cost <> 0").select("%, d1.get(stri(class_l)) class_s, tp.get(stri(tradepartnerident_l)) trade_s").ValueBuffer()
+  
+  
+//   getDeals = "Result:" + startTS + " " + endTS + " " + dealClasses + " " + dcList
+  getDeals = r2json(vbDeals.desc().select("NAME name, NAME field"))
+  
+endfunc
+
+function getDealsData(Reader r) : String
+  getDealsData = r2json(vbDeals.Reader(0, 10))
+endfunc
+
+function getDealsData1(Reader r) : String
+  DataDict d  = new DataDict()
+  r.do("d.set(key,value)")    
+  Integer start = vali(d.get("start"))
+  Integer count = vali(d.get("count"))  
+  getDealsData1 = r2json(vbDeals.Reader(start, min(start + count, vbDeals.getRecCount())))
+endfunc
+
+
+
+function getDealsCount(Reader r) : Long
+  getDealsCount = vbDeals.getRecCount()    
+endfunc
+
+
+Reader rAggregationData
+function getAggregationData(Reader r) : String
+    getAggregationData = r2json(rAggregationData)
+endfunc
+
+String[] sellBuy = {"sell", "buy"}
+String[] quantCost = {"quantity", "cost"}
+
+
+function getAggregation(Reader r) : String
+  Reader r1 = vbDeals.Reader().rowCol("trade_s", "commodity_name_s,buy_si", "total(quantity) quantity, total(cost) cost, round(total(cost) / total(quantity),2) pricePerUnit", "commodity_name_s + ' ' + sellBuy[buy_si] + '_Q', commodity_name_s + ' ' + sellBuy[buy_si] + '_C', commodity_name_s + ' ' + sellBuy[buy_si] + '_PU'")
+  rAggregationData = r1
+  getAggregation = r2json(r1.desc().select("NAME name, NAME field"))
+endfunc
+
+////////////////////////////////////////////////////////////////////////////////////
+ValueBuffer vbtpclassoverview
+function getTradeParterClassOverview(Reader r) : String
+  vbtpclassoverview = getTradeClassOverview(vbDeals)
+  getTradeParterClassOverview = r2json(vbtpclassoverview.desc().select("NAME name, NAME field"))
+endfunc
+
+function getTradeParterClassOverviewData(Reader r) : String
+  getTradeParterClassOverviewData = r2json(vbtpclassoverview)
+endfunc
+//////////////////////////////////////////////////////////////////////////////////
+
+ValueBuffer vbTradePartnerMetaData
+
+function getTradePartnerMeta(Reader r) : String
+  vbTradePartnerMetaData = getTradePartnerMetaData(now()).ValueBuffer()
+  getTradePartnerMeta = r2json(vbTradePartnerMetaData.desc().select("NAME name, NAME field"))
+endfunc
+
+function getTradePartnerMetaData(Reader r) : String
+  getTradePartnerMetaData = r2json(vbTradePartnerMetaData)
+endfunc
+
+////////////////////////////////////////////////////////////////////////////
+
+
+
+function testDeals() : String
+  Reader r = series("x", 0, 0, 1).select("'startTS' key, '2016' value")
+  r = r + series("x", 0, 0, 1).select("'endTS' key, '2017' value")    
+  r = r+ series("x", 0, 0, 1).select("'selectedDealClasses' key, '[{" + QUOTE + "id" + QUOTE + ":2}]' value")
+  getDeals(r)
+endfunc
+
+
+function test(Reader r) : String
+  sleep(minute(1))
+  test = "abcdef"  
+endfunc

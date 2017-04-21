@@ -1,0 +1,154 @@
+include /Project/bvag/Util.kis
+include /project/bvag/KeyValue.kis
+
+// this global variable will be set with the DataDict of all values
+DataDict allParameters
+
+
+struc ItemRecord
+   Boolean isInput
+   String name
+   String dataType
+   String description 
+endstruc
+
+
+// Beschreibungen für die Input- und Outputvariablen der QuantityPricePreparation Objekte
+DataDict qpDesc = new DataDict()
+DataDict qpDescType = new DataDict()
+
+
+struc InvoiceItem
+   String invoiceID
+   String id
+   String type
+   String createRecord
+   String name
+   String quantity
+   String quantityUnit
+   String singlePrice
+   String singlePriceUnit
+   String totalPrice
+   String totalPriceUnit
+   String comment
+   String quantityFormat
+   String singlePriceFormat
+   String totalPriceFormat
+   String status
+   DataDict userDefined
+   KeyValue[] kv
+endstruc
+
+
+
+struc QuantityPricePreparation
+   String name
+   Writer prepareFunc   
+   
+   // will be filled with values
+   DataDict result
+ 
+   // true, after prepare has been called
+   Boolean init
+
+   // the configuration
+   DataDict d
+
+   InvoiceItem ii
+
+   ItemRecord[] metaData
+
+endstruc
+
+
+function QuantityPricePreparation.create(String name, Writer prepareFunc) : QuantityPricePreparation
+    QuantityPricePreparation result = new QuantityPricePreparation
+    result.name = name
+    result.prepareFunc = prepareFunc
+    result.init = false
+    result.result = null
+    result.metaData = qpDesc.get(name) as ItemRecord[]
+    QuantityPricePreparation.create = result
+endfunc
+
+function QuantityPricePreparation.initCFG(QuantityPricePreparation this, DataDict d) : Integer
+  if this.init then
+    this.init = false
+    this.result = null
+  endif    
+  this.d = d
+endfunc
+
+
+function QuantityPricePreparation.prepare(QuantityPricePreparation this, InvoiceItem ii) : DataDict
+    Error error
+    if not this.init then
+      DataDict result = this.d.goc(ii.id)
+      if (ii.kv != null) then
+         Integer j
+         for j = 0 to ii.kv.length - 1 step 1
+            try 
+              ii.kv[j].update(this.d, result)
+            catch error
+              throw runtimeError(error.getMessage() + "happened for parameter " + ii.kv[j].key + ": " + ii.kv[j].value)
+            endtry
+         next 
+      endif
+      this.ii = ii
+      this.prepareFunc.setObject(0, ii.id)
+      this.prepareFunc.setObject(1, this.d)
+      this.prepareFunc.setObject(2, result)
+      this.result = this.prepareFunc.execute() as DataDict 
+      this.init = true
+    endif
+    QuantityPricePreparation.prepare = this.result
+endfunc
+
+DataDict qPPF = new DataDict()
+
+function registerInvoiceItemType(String type, String functionName) : String
+   if qPPF.get(type) != null then
+       throw runtimeError(format("Error registering type %s. Type is registered already", type))
+   endif
+   qPPF.set(type, 'QuantityPricePreparation.create("' + type + '", prepare("' + functionName + '(String id, DataDict d, DataDict result)"))')
+   registerInvoiceItemType = "OK"
+endfunc
+
+registerInvoiceItemType("eex", "createSpotMarket")
+
+// qPPF = "quantityPricePreparationFactory"
+// qPPF.set("eex", 'QuantityPricePreparation.create("eex", prepare("createSpotMarket(String id, DataDict d, DataDict result)"))')
+qPPF.set("otc", 'QuantityPricePreparation.create("otc", prepare("createOTC(String id, DataDict d, DataDict result)"))')
+qPPF.set("formula", 'QuantityPricePreparation.create("formula", prepare("createFormulaItem(String id, DataDict d, DataDict result)"))')
+qPPF.set("quantity", 'QuantityPricePreparation.create("quantity", prepare("createQuantity(String id, DataDict d, DataDict result)"))')
+qPPF.set("eeg", 'QuantityPricePreparation.create("eeg", prepare("createEEGFee(String id, DataDict d, DataDict result)"))')
+qPPF.set("reader", 'QuantityPricePreparation.create("reader", prepare("createReader(String id, DataDict d, DataDict result)"))')
+qPPF.set("distribution", 'QuantityPricePreparation.create("distribution", prepare("createDistribution(String id, DataDict d, DataDict result)"))')
+qPPF.set("loop", 'QuantityPricePreparation.create("loop", prepare("createLoop(String id, DataDict d, DataDict result)"))')
+qPPF.set("lookup", 'QuantityPricePreparation.create("lookup", prepare("createLookUp(String id, DataDict d, DataDict result)"))')
+/// qPPF.set("distribution", 'QuantityPricePreparation.create("reader", prepare("createReader(String id, DataDict d, DataDict result)"))')
+
+
+
+
+
+/**
+ * creates an XML-Snippet for am Onvoice Item.
+ *@param invoiceID
+ *@param id
+ *@param createRecord
+ *@param type
+ *@return
+ */
+function createTemplate(String invoiceID, String id, Boolean createRecord, String type) : String
+  String template = download("/project/natGas/product/ItemTemplate.tpl").readString("utf-8")
+  ItemRecord[] ir = qpDesc.get(type) as ItemRecord[]
+  String p1 = "<parameter><key>%s</key><value></value></parameter>" + CRLF
+  if ir != null and ir.length != null then
+     String p = pattern(p1, p1, arrayAsReader(ir).filter("isInput").select("name"))
+     template = format(template, invoiceID, id, type, createRecord, "<parameters>" + CRLF + p + "</parameters>")
+  else
+     template = format(template, "") 
+  endif   
+  createTemplate = template
+endfunc

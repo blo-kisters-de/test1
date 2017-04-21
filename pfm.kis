@@ -1,0 +1,1377 @@
+include /project/bvag/generalItems.kis
+include /project/bvag/HistUserFields.kis
+include /project/bvag/CreditRisk.kis
+
+module de.kisters.kiscript.dbmodel.register.Model#B3#b3#/project/bvag/dbmodel.xml
+
+
+function getGreenPowerFeeInstance() : Integer
+  static Integer fee = conf.pfm.select("ident from stationbase where mstnr_s = 'Grünstromaufschlag'").do("ident")
+  getGreenPowerFeeInstance = fee
+endfunc
+
+
+function getSubBooks(Integer book, String[] arr) : Integer
+  Reader r = conf.pfm.select("ident_book_l from v_sd_book where ident_parent_l = " + book)
+  while r.next()
+    getSubBooks(r.ident_book_l, arr)
+  endwhile
+  arr[0] = arr[0] + "," + book
+endfunc
+
+
+function getSubBooks(Integer book) : String
+  String[] res = new String[1]
+  getSubBooks(book, res)
+  getSubBooks = mid(res[0], 2)    
+endfunc
+
+
+// Mengenzeitreihe für einen Deal
+function get5000TS(Integer instID) : Long
+  static DataDict tsLookUp = null    
+  if tsLookUp = null then
+    tsLookUp = new DataDict()
+    conf.pfm.select("ident_inst_l, ident_vl_l from v_zr_all where specification_l = 5000").do("tsLookUp.set(strl(ident_inst_l), ident_vl_l)")    
+  endif
+  get5000TS = tsLookUp.getLong(stri(instID))
+endfunc
+
+// Mengenzeitreihe für einen Deal
+function get5000TSGas(Integer instID) : Long
+  static DataDict tsLookUp = null    
+  if tsLookUp = null then
+    tsLookUp = new DataDict()
+    conf.pfmGas.select("ident_inst_l, ident_vl_l from v_zr_all where specification_l = 5000").do("tsLookUp.set(strl(ident_inst_l), ident_vl_l)")    
+  endif
+  get5000TSGas = tsLookUp.getLong(stri(instID))
+endfunc
+
+
+
+// Strom- aktuelle PFC Preiszeitreihe einer Preisinstanz
+function get10015TS(Integer instID) : Long
+  static DataDict tsLookUp = null    
+  if tsLookUp = null then
+    tsLookUp = new DataDict()
+    conf.pfm.select("ident_inst_l, ident_vl_l from v_zr_all where specification_l = 10015").do("tsLookUp.set(strl(ident_inst_l), ident_vl_l)")    
+  endif
+  get10015TS = tsLookUp.getLong(stri(instID))
+endfunc
+
+// Spotmarkpreise EXAA
+function get10001TS(Integer instID) : Long
+  static DataDict tsLookUp = null    
+  if tsLookUp = null then
+    tsLookUp = new DataDict()
+    conf.pfm.select("ident_inst_l, ident_vl_l from v_zr_all where specification_l = 10001").do("tsLookUp.set(strl(ident_inst_l), ident_vl_l)")    
+  endif
+  get10001TS = tsLookUp.getLong(stri(instID))
+endfunc
+
+
+function _privateDealClass() : DataDict
+  DataDict d = new DataDict()
+  conf.pfm.select("ident, name_s from wk_dealclass").do("d.set(stri(ident), name_s)")
+  _privateDealClass = d  
+endfunc
+
+function getDealClass(Integer class) : String
+  static DataDict d = _privateDealClass()
+  getDealClass = d.getString(stri(class))
+endfunc
+
+
+function _privateTradePartner(DBConnection c) : DataDict
+  let tp = new DataDict()
+  c.select("ident, participant_name_s from tradepartner").do("tp.set(stri(ident), participant_name_s)")
+  _privateTradePartner = tp  
+endfunc
+
+function getTradePartner(Integer tp) : String
+  static DataDict d = _privateTradePartner(conf.pfm)
+  getTradePartner = d.getString(stri(tp))
+endfunc
+
+
+function getTradePartnerGas(Integer tp) : String
+  static DataDict d = _privateTradePartner(conf.pfmGas)
+  getTradePartnerGas = d.getString(stri(tp))
+endfunc
+
+
+/**
+ *
+ *@param resultDict : Boolean includeInternal, Integer status, Integer dealClass (0..4)
+ *@return
+ */
+function getDealFilterSQL(DataDict resultDict) : String
+  Boolean includeInternal = resultDict.includeInternal
+  if includeInternal = null then
+    includeInternal = true
+  endif
+  Integer status = resultDict.status
+
+  if includeInternal = null then
+    includeInternal = true
+  endif
+  if status = null then
+    status = 7
+  endif
+  
+  String additionalFilter = ""
+  if includeInternal = false then
+    additionalFilter = additionalFilter + " and (counterdealident_l = null) "
+  endif
+  
+  if (status != 7 and status != 0) then
+    String af = ""
+    if status and 1 then
+      // state_si = 0 => hypothetisch
+      af = " or state_si = 0 "
+    endif
+    if status and 2 then
+      // state_si = 1 => real
+      af = af + " or state_si = 1 "  
+    endif
+    if status and 4 then
+      // state_si = 2 => real bestätigt
+      af = af + " or state_si = 2 "    
+    endif
+    
+    if (af != "") then
+      additionalFilter = additionalFilter + " and (" +  mid(af, 5) + ")"
+    endif
+    
+  endif
+
+  Integer dealClass = resultDict.dealClass
+  
+  String classFilter = null
+  if dealClass = 0 then
+     classFilter = "7,24"
+  elseif dealClass = 1 then
+     classFilter = "6,21,22,23" 
+  elseif dealClass = 2 then
+      if includeInternal then
+        classFilter = "1,4,5,15,16,17,18,19,20,26"
+      else
+        classFilter = "1,15,16,17,18,19,20,26"
+      endif
+  elseif dealClass = 3 then
+      if includeInternal then
+        classFilter = "2,8,9"
+      else
+        classFilter = "2"  
+      endif
+  elseif dealClass = 4 then
+      if includeInternal then
+        classFilter = "3,13"
+      else
+        classFilter = "3"
+      endif
+  endif
+
+  if classFilter != null then
+     additionalFilter = additionalFilter + " and (class_l as Integer) in {" + classFilter + "}"
+  endif
+  getDealFilterSQL = additionalFilter      
+endfunc
+
+
+/**
+ * Input parameter for the dictionary:
+ * Boolean buy true = buy, false = sell
+ * String book = book ID
+ * Timestamp tsFrom, tsUntil : timerange
+ * Integer status : null = all, 1 = hypothetic, 2 = real, 4 real confirmed and all combinations (bit-mask)
+ * Boolean includeInternal true with internal deals, false without internal deals
+ * Boolean includeSubBook  true with sub-books, false without subBooks
+ * Integer dealClass : 0 = Feed, 1 = Extract, 2 = Forward, 3 = Spot, 4 = Balance
+ * 
+ *@param iiID
+ *@param d
+ *@param resultDict
+ *@return
+ */
+function createBookValueDetails(String iiID, DataDict d, DataDict resultDict) : Integer
+  String selFormat = "select ident, id_l, pricepermwh_fl, pricevaluelist_l, buy_si, counterdealident_l, state_si, class_l from v_sd_deal where bookident_l in (%s) and buy_si = ? and supplyend_ts > ? and supplystart_ts <= ?"
+  checkParameterNotNull(resultDict, "", "buy, book", null)
+//   checkParameterNotNull(d, "", "tsFrom, tsUntil", null)
+  Boolean buy = resultDict.getBoolean("buy")
+  String book = resultDict.get("book")
+  Timestamp tsFrom = resultDict.getTimestamp("tsFrom")
+  Timestamp tsUntil = resultDict.getTimestamp("tsUntil")
+  Boolean includeInternal = resultDict.includeInternal
+  if includeInternal = null then
+    includeInternal = true
+  endif
+  Integer status = resultDict.status
+
+  if includeInternal = null then
+    includeInternal = true
+  endif
+  if status = null then
+    status = 7
+  endif
+  
+  String additionalFilter = ""
+  if includeInternal = false then
+    additionalFilter = additionalFilter + " and (counterdealident_l = null) "
+  endif
+  
+  if (status != 7 and status != 0) then
+    String af = ""
+    if status and 1 then
+      // state_si = 0 => hypothetisch
+      af = " or state_si = 0 "
+    endif
+    if status and 2 then
+      // state_si = 1 => real
+      af = af + " or state_si = 1 "  
+    endif
+    if status and 4 then
+      // state_si = 2 => real bestätigt
+      af = af + " or state_si = 2 "    
+    endif
+    
+    if (af != "") then
+      additionalFilter = additionalFilter + " and (" +  mid(af, 5) + ")"
+    endif
+    
+  endif
+
+  Integer dealClass = resultDict.dealClass
+  
+  String classFilter = null
+  if dealClass = 0 then
+     classFilter = "7,24"
+  elseif dealClass = 1 then
+     classFilter = "6,21,22,23" 
+  elseif dealClass = 2 then
+      if includeInternal then
+        classFilter = "1,4,5,15,16,17,18,19,20,26"
+      else
+        classFilter = "1,15,16,17,18,19,20,26"
+      endif
+  elseif dealClass = 3 then
+      if includeInternal then
+        classFilter = "2,8,9"
+      else
+        classFilter = "2"  
+      endif
+  elseif dealClass = 4 then
+      if includeInternal then
+        classFilter = "3,13"
+      else
+        classFilter = "3"
+      endif
+  endif
+
+  if classFilter != null then
+     additionalFilter = additionalFilter + " and (class_l as Integer) in {" + classFilter + "}"
+  endif
+  
+  
+  if (tsFrom = null) then
+      tsFrom = d.getTimestamp("tsFrom")
+  endif
+  if (tsUntil = null) then
+    tsUntil = d.getTimestamp("tsUntil")  
+  endif
+  Writer w = conf.pfm.prepareQuery(format(selFormat, book))
+  Reader r = w.execute(buy, tsFrom, tsUntil) 
+  if (additionalFilter != "") then
+    r = r.filter(mid(additionalFilter, 6))
+  endif
+  r = r.select("%, get5000TS(ident) inst.ident_vl_l")
+//   r = r.extend("deal", 'conf.pfm.select("ident_vl_l from v_zr_all where ident_inst_l = " + ident + " and specification_l = 5000")', "inst", false)
+  if r = null then
+      resultDict.setFloat("specificPrice", null)
+      resultDict.setFloat("maxQuantity", 0)
+      resultDict.setFloat("totalCost", 0)
+      resultDict.setFloat("totalQuantity", 0)
+      return
+  endif
+  ValueBuffer vb1 = r.ValueBuffer()
+  resultDict.set("deals", vb1)
+  r = vb1.Reader()
+  Reader result = null
+  Field fVLID = r.getField("inst.ident_vl_l")
+  Field fDealID = r.getField("id_l")
+  Field fDealPriceVLID = r.getField("pricevaluelist_l")
+  Field fPricePerMWH = r.getField("pricepermwh_fl")
+  ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").select("ts, 0.0f quantity, 0.0f cost").ValueBuffer()
+  Reader rPrice
+  Reader r1
+  while r.next()
+    result = vbTS.Reader()
+    r1 = getTimeseriesValues66(conf.pfm, fVLID.getLong(), tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.ts, value D.quantity").ValueBuffer()
+    if (fDealPriceVLID.getLong() = null) then
+      rPrice = vbTS.select("ts D.tsp, fPricePerMWH.getFloat() D.price").ValueBuffer()
+    else
+      rPrice = getTimeseriesValues66(conf.pfm, fDealPriceVLID.getLong(), tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.tsp, value D.price")
+    endif
+    result = result.extend(r1, null, "ts = " + r1.getField(0).getName())
+    result = result.extend(rPrice, null, "ts = " + rPrice.getField(0).getName())
+    result = result.select("%, if (D.quantity = null or D.price = null, 0f, D.quantity * D.price) D.cost")  
+    vbTS = result.select("ts, quantity + if(D.quantity=null, 0f, D.quantity) quantity, cost + D.cost cost").ValueBuffer()
+    result.close()
+    rPrice.close()
+    r1.close()
+  endwhile
+
+  Reader rAgg = vbTS.groupSelect("total(quantity) totalquantity, total(cost) totalCost", "", "")
+  rAgg.next()
+//  String prefix = "otc.buy." + buy
+  resultDict.set("specificPrice", rAgg.getField("totalCost").getFloat() / rAgg.getField("totalQuantity").getFloat())
+  resultDict.set("totalCost", rAgg.getField("totalCost").getFloat())
+  resultDict.set("totalQuantity", rAgg.getField("totalquantity").getFloat())
+  resultDict.set("ts", vbTS)
+  rAgg.close()  
+  w.close()
+//    vb2.transpose(null, 0, -1, 0, -1, 1).groupSelect("total(F0) total"
+  dac.addString("createBookDetails","deals = " + vb1.getRecCount() + ", totalQuantity = " + resultDict.getFloat("totalQuantity"))
+endfunc
+
+function getDealClassName(Integer dealClass) : String
+    if (dealClass = null) then
+      getDealClassName = "All"
+    elseif (dealClass = 0) then
+      getDealClassName = "feed"
+    elseif (dealClass = 1) then
+      getDealClassName = "extract"
+    elseif (dealClass = 2) then
+      getDealClassName = "forward"
+    elseif (dealClass = 3) then
+      getDealClassName = "spot"
+    elseif (dealClass = 4) then
+      getDealClassName = "balance"
+    else
+      throw runtimeError("unknown deal class")    
+    endif
+endfunc
+
+/**
+ * Input parameter for the dictionary:
+ * Integer book = book ID
+ * Timestamp tsFrom, tsUntil : timerange
+ * Boolean includeInternal true with internal deals, false without internal deals
+ * Boolean includeSubBook  true with sub-books, false without subBooks
+*/
+function createBookValues(String iiID, DataDict d, DataDict resultDict) : Integer
+   Boolean includeSubBook = resultDict.includeSubBook
+   if includeSubBook = null then
+     includeSubBook = true
+   endif    
+   
+   String book = resultDict.book
+   if includeSubBook then
+      book = getSubBooks(resultDict.book)
+   endif
+   
+   Integer buy 
+   Integer dealClass
+   for buy = 0 to 1 step 1 
+     DataDict buySell = new DataDict()
+     resultDict.set(whenString(buy = 0, "sell", "buy"), buySell)
+     for dealClass = 0 to 4 step 1
+       dac.addString("what", "buy = " + buy + ", dealClass = " + getDealClassName(dealClass))
+       DataDict res = new DataDict()
+       res.setTimestamp("tsFrom", resultDict.tsFrom)
+       res.setTimestamp("tsUntil", resultDict.tsUntil)
+       res.setString("book", book)   
+       res.setInteger("status", resultDict.status)
+       res.setBoolean("includeInternal", resultDict.includeInternal)
+       res.setBoolean("buy", buy = 1)
+       res.setInteger("dealClass", dealClass)
+       createBookValueDetails("", d, res)
+       String dcn = getDealClassName(dealClass)           
+       buySell.set(dcn, res)
+     next
+   next
+endfunc
+
+
+
+/**
+ * generates the Short and Long positions of a portfolio.
+ *@param iiID
+ *@param d
+ *@param resultDict this is expected to be filled with the createBookValue function: resultDict.sell.extract.ts, resultDict.buy.extract.ts and so on
+ *
+ *
+ *@return
+ */
+function generateShortLong(String iiID, DataDict d, DataDict resultDict) : Integer
+   Integer i
+   DataDict longShort = new DataDict()
+   Reader result
+   for i = 0 to 4 step 1
+     ValueBuffer buy = resultDict.buy.asDataDict().getDataDict(getDealClassName(i)).ts as ValueBuffer
+     ValueBuffer sell = resultDict.sell.asDataDict().getDataDict(getDealClassName(i)).ts as ValueBuffer
+     Reader r = buy.Reader().extend(sell, "sell.")
+     r = r.aggregate("total(whenFloat(quantity - sell.quantity < 0, sell.quantity - quantity, 0)) short, total(whenFloat(quantity - sell.quantity > 0, quantity - sell.quantity, 0)) long", "")
+     r = r.select(format("'%s' dc, %%", getDealClassName(i)))
+     result = result + r
+   next    
+   resultDict.set("longShort", result.ValueBuffer())
+endfunc
+
+/**
+ * Deprecated. Use getAggregated Values
+ *@param iiID
+ *@param d
+ *@param resultDict
+ *@return
+ */
+function createTradeValueDetails(String iiID, DataDict d, DataDict resultDict) : Integer
+  static String selFormat = "select ident, id_l, pricepermwh_fl, quantityinmwh_fl, worth_fl, supplystart_ts, supplyend_ts, pricevaluelist_l, buy_si, counterdealident_l, state_si, class_l, commodity_name_s from v_sd_deal where tradepartnerident_l = %d and buy_si = ? and supplyend_ts > ? and supplystart_ts <= ?"
+  checkParameterNotNull(resultDict, "", "buy, tradePartner", null)
+//   checkParameterNotNull(d, "", "tsFrom, tsUntil", null)
+  Boolean buy = resultDict.getBoolean("buy")
+  Integer tradePartner = resultDict.get("tradePartner")
+  Timestamp tsFrom = resultDict.getTimestamp("tsFrom")
+  Timestamp tsUntil = resultDict.getTimestamp("tsUntil")
+  String additionalFilter = getDealFilterSQL(resultDict)
+  
+  
+  if (tsFrom = null) then
+      tsFrom = d.getTimestamp("tsFrom")
+  endif
+  if (tsUntil = null) then
+    tsUntil = d.getTimestamp("tsUntil")  
+  endif
+  Writer w = conf.pfm.prepareQuery(format(selFormat, tradePartner))
+  Reader r = w.execute(buy, tsFrom, tsUntil) 
+  if (additionalFilter != "") then
+    r = r.filter(mid(additionalFilter, 6))
+  endif
+  r = r.select("%, get5000TS(ident) inst.ident_vl_l")
+  
+  
+//   r = r.extend("deal", 'conf.pfm.select("ident_vl_l from v_zr_all where ident_inst_l = " + ident + " and specification_l = 5000")', "inst", false)
+  if r = null then
+      return
+  endif
+
+  // Split the deals in those, which are completely within the time-range (tsFrom, tsUntil) and those which overlap the range.
+  // those which are totally included can be calculated simply by aggregating the deals: 
+  // total(quantityinmwh_fl) quantityinmwh_fl, total(worth_fl) worth_fl
+  r = r.sort("supplystart_ts >= tsFrom and supplyend_ts <= tsUntil desc").ValueBuffer().Reader()
+  Reader rSimpleCalc = r.nextWhile("supplystart_ts >= tsFrom and supplyend_ts <= tsUntil")
+  Object[][] resultSimple = rSimpleCalc.aggregate("commodity_name_s, total(quantityinmwh_fl) quantityinmwh_fl, total(worth_fl) worth_fl, count() count", "commodity_name_s").asArray()
+  
+
+  // put the rest into a ValueBuffer  
+  ValueBuffer vb1 = r.ValueBuffer()
+  resultDict.set("deals", vb1)
+  r = vb1.Reader()
+  Reader result = null
+  Field fVLID = r.getField("inst.ident_vl_l")
+  Field fDealID = r.getField("id_l")
+  Field fDealPriceVLID = r.getField("pricevaluelist_l")
+  Field fPricePerMWH = r.getField("pricepermwh_fl")
+  ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").select("ts, 0.0f quantity, 0.0f cost, 0 count").ValueBuffer()
+  Reader rPrice
+  Reader r1
+  DataDict commodities = new DataDict()
+  while r.next()
+    DataDict current = commodities.get(r.commodity_name_s)
+    if (current = null) then
+      current = new DataDict()
+      commodities.setDataDict(r.commodity_name_s, current)  
+      current.set("result", vbTS) 
+    endif  
+    result = (current.get("result") as ValueBuffer).Reader()
+    r1 = getTimeseriesValues66(conf.pfm, fVLID.getLong(), tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.ts, value D.quantity").ValueBuffer()
+    if (fDealPriceVLID.getLong() = null) then
+      rPrice = vbTS.select("ts D.tsp, fPricePerMWH.getFloat() D.price").ValueBuffer()
+    else
+      rPrice = getTimeseriesValues66(conf.pfm, fDealPriceVLID.getLong(), tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.tsp, value D.price").ValueBuffer()
+    endif
+    result = result.extend(r1, null, "ts = " + r1.getField(0).getName())
+    result = result.extend(rPrice, null, "ts = " + rPrice.getField(0).getName())
+    result = result.select("%, if (D.quantity = null or D.price = null, 0f, D.quantity * D.price) D.cost")  
+    ValueBuffer vbTSResult = result.select("ts, quantity + if(D.quantity=null, 0f, D.quantity) quantity, cost + D.cost cost, count + 1 count").ValueBuffer()
+    current.set("result", vbTSResult)
+    result.close()
+    rPrice.close()
+    r1.close()
+  endwhile
+
+  Reader totalResult = null
+  String key = commodities.findFirstKey()
+  while key != null
+    Reader rAgg = current.get("result").asReader().groupSelect("total(quantity) totalquantity, total(cost) totalCost, count", "", "")
+    rAgg.next()
+
+    Float totalCost = rAgg.totalCost
+    Float totalQuantity = rAgg.totalQuantity
+    Integer count = rAgg.count
+    totalResult = totalResult + series("x", 0, 0, 1).select("tradePartner, buy, key commodity, totalQuantity, totalCost, count").ValueBuffer().Reader() 
+    key = commodities.findNextKey()
+  endwhile
+
+  
+  if resultSimple != null and resultSimple.length >= 1 then
+     result = series("x", 0, resultSimple.length - 1, 1).select("tradePartner, buy, resultSimple[x][0] as String commodity, resultSimple[x][1] as Float totalQuantity, resultSimple[x][2] as Float totalCost, resultSimple[x][3] as Integer count")
+     if totalResult = null then
+       totalResult = result
+     else
+       totalResult = (result + totalResult).aggregate("tradePartner, buy, commodity, total(totalQuantity) totalQuantity, total(totalCost) totalCost, total(count) as Integer count", "commodity")
+     endif  
+  endif
+
+  
+
+  resultDict.set("total", totalResult.ValueBuffer())
+  rAgg.close()  
+  w.close()
+endfunc
+
+
+function getTradePartnerOverview(Timestamp tsFrom, Timestamp tsUntil) : Reader
+  Reader r = conf.pfm.select("ident, participant_name_s from tradepartner order by 1")
+  Reader result
+  while r.next()
+    Integer i 
+    for i = 0 to 1 step 1
+      DataDict d = new DataDict()
+      d.set("tradePartner", r.getField(0).getInteger())
+      d.set("tsFrom", tsFrom)
+      d.set("tsUntil", tsUntil)
+      d.set("buy", i = 0)
+      createTradeValueDetails("", null, d)
+      result = result + d.total.asReader() 
+    next
+    dac.addString("tradePartner", r.getField(1).getString())
+  endwhile        
+  getTradePartnerOverview = result    
+endfunc
+
+function getHUFTrade() : HistUserFields
+  static HistUserFields huf = new HistUserFields(15010)
+  getHUFTrade = huf
+endfunc
+
+
+function translateKonzernLimit(String limit) : Float
+    String s = trim(replaceAll(replaceAll(limit, '€', ''),'\.', ''))
+    if s = "-" then
+      translateKonzernLimit = null    
+    else
+      translateKonzernLimit = valfx(s)  
+    endif
+endfunc
+
+
+function getMutterGesellschaft(Integer idHP) : String
+  static String sel = "select adrvname_s from ZUORD_PARTNER, Manager where ZUORD_PARTNER.adress_l = Manager.adress_id_sl and adrnname_s = 'Muttergesellschaft' and ZUORD_PARTNER.instanz_l = ?"
+  Writer w = sc.prepareQuery(conf.pfm, sel, null)
+  getMutterGesellschaft = (w.execute(idHP) as Reader).do("adrvname_s")
+endfunc  
+  
+  
+    
+
+
+/**
+ * get a list of all trade-partners include their extenstion fields as a list.
+ *@param ts the timestamp to which the extension fields should be valid
+ *@return the list with all attributes
+ */
+function getTradePartnerMetaData(DBConnection c, Timestamp ts) : Reader
+   HistUserFields huf = getHUFTrade() 
+   huf.ixIdent
+   if ts = null then
+     ts = now()
+   endif
+   
+   // prepare the list of "extension-fields"
+   Reader r = c.select("* from mn_histuserfields")
+   r = r.filter("start_ts <= ts and (end_ts = null or end_ts.addDay(1) > ts)")
+   r = r.select("instanceident_l, start_ts, end_ts, field_l, huf.getContent(field_l,'fieldname_s') name, vali(huf.getContent(field_l,'id_l')) id, huf.getListContent(value_l, field_l) value")
+
+   // calculate the index, in which column, which extension field will be placed:
+   DataDict dRow = new DataDict()
+   ValueBuffer ix = huf.vbMain.index("id_l", "")
+   ix.do("dRow.setInteger(stri(id_l), row)")
+   
+   // calculate the head lines of the table
+   String head = pattern("%s", ix.select("fieldname_s"))
+
+   // get and prepare the list of all trade-partners
+   Reader r1 = c.select("ident_tradepartner_l, name_s, alias_s, commission_fl, state_si, remit_reportingentity_si, remit_participant_name_s, remit_participant_id_s, remit_participant_agency_l, remit_participant_code_s from v_sd_tradepartner")
+   r1 = r1.select("ident_tradepartner_l, name_s, alias_s, commission_fl, whenString(state_si=0,'gesperrt','aktiv') state_si, remit_reportingentity_si, remit_participant_name_s, remit_participant_id_s, remit_participant_agency_l, remit_participant_code_s, getMutterGesellschaft(ident_tradepartner_l) mutterGesellschaft")
+
+   // join the trade-partner with the extension-fields
+   Reader r2 = Reader.joinCol(r1, null, r, "extensions", "ident_tradepartner_l","instanceident_l", 1) 
+   
+   
+   // transpose the result, so that the extension-fields become one line
+   Reader r3 = r2.transposeGroup("ident_tradepartner_l, name_s, alias_s, commission_fl, state_si, remit_reportingentity_si, remit_participant_name_s, remit_participant_id_s, remit_participant_agency_l, remit_participant_code_s, mutterGesellschaft", "extensions.value", "dRow.getInteger(stri(extensions.id))", head)
+  
+   getTradePartnerMetaData = r3
+         
+endfunc
+
+function getTradePartnerMetaData(Timestamp ts) : Reader
+  getTradePartnerMetaData = getTradePartnerMetaData(conf.pfm, ts)
+endfunc
+
+function makeVar(String s) : String
+  s = replaceAll(s, "[\.| |\(|\)|-|\+|/|&]", "_")
+  s = replaceAll(s, "ü", "ue")
+  s = replaceAll(s, "ä", "ae")
+  s = replaceAll(s, "Ä", "Ae")
+  s = replaceAll(s, "ö", "oe")
+  s = replaceAll(s, "ß", "ss")
+  s = replaceAll(s, "-", "_")
+  s = replaceAll(s, "¿", "_")
+  makeVar = s
+endfunc
+
+
+/**
+ * Liefert ein "Merge von Strom und Gas-Mandanten.
+ * Der Strom-Mandant hat Vorrang, das heißt, wenn Stammdaten in beiden Mandanten vorhanden sind, dann wird der Strom-Mandant beforzugt.
+ *@param ts Stichtag
+ *@return
+ */
+function getTradePartnerMetaDataStromGas(Timestamp ts) : Reader
+  // Stammdaten aus Gas
+  Reader r1 = getTradePartnerMetaData(conf.pfmGas, ts).selectFields("true", "makeVar(NAME)").select("'Gas' what, %").makeRewindable()
+  // Stammdaten aus Strom
+  Reader r2 = getTradePartnerMetaData(ts).selectFields("true", "makeVar(NAME)").select("'Strom' what, %").makeRewindable()
+
+  // erstmal alle zusammen in eine Liste (untereinander), sortiert nach Name
+  Reader r3 = (r1 + r2).sort("name_s, what")
+  // Ermittlung Strom-Ident und Gas Ident
+  Reader r4 = r3.transposeGroup("name_s", "ident_tradepartner_l", "whenInteger(what='Strom',0, 1)", "ident_tradepartner_strom, ident_tradepartner_gas")
+
+  // Strom und Gas join
+  Reader r5 = Reader.joinCol(r1, "Gas", r2, "Strom", "name_s", "name_s", 3)
+
+  // Ergebnis join mit Gesamtliste
+  Reader r6 = Reader.joinCol(r4, null, r5, null, "name_s", "whenString(Strom.name_s != null, Strom.name_s, Gas.name_s)").makeRewindable()
+
+  // Bestimmung der Selektionsformel : "Strom hat Vorrang, wenn beide Mandanten den Händler gespeichert haben
+  String sel = pattern("%s", Reader.joinCol(r6.desc().filter("startsWith(NAME, 'Strom.')").Reader().skip(2), "Strom", r6.desc().filter("startsWith(NAME, 'Gas.')").Reader().skip(2), "Gas", "row", "row").select("'when' + Strom.DATATYPE + '(useStrom, ' + Strom.NAME + ', ' + Gas.NAME + ') ' + mid(Strom.NAME, 7)  sel"))
+
+  // Selektion der Stammdaten
+  Reader r7 = r6.select("%, ident_tradepartner_strom != null useStrom").select("ident_tradepartner_strom, ident_tradepartner_gas, " + sel )
+  getTradePartnerMetaDataStromGas = r7
+endfunc
+
+
+function getAggregatedValues(Integer dealID, Integer priceID, Float pricePerUnit, Timestamp tsFrom, Timestamp tsUntil, Boolean takeDealValues, Float quantity, Float cost) : Reader
+    Timestamp ts = now()
+    if not takeDealValues then
+       quantity = 0
+       cost = 0 
+       Long tsid = get5000TS(dealID)
+       Reader r1 = getTimeseriesValues66(conf.pfm, tsid, tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.ts, value D.quantity").ValueBuffer()
+       if (priceID = null) then
+        Reader r2 = r1.aggregateLocal("total(D.quantity)", "")
+        if (r2.next()) then
+           quantity = r2.getField(0).getFloat()
+           cost = quantity * pricePerUnit
+        endif
+        r2.close()
+      else
+        Reader rPrice = getTimeseriesValues66(conf.pfm, priceID, tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.tsp, value D.price").ValueBuffer()
+        Reader result = r1
+        result = result.extend(rPrice, null, "D.ts = " + rPrice.getField(0).getName())
+        result = result.aggregateLocal("total(D.quantity), total(if (D.quantity = null or D.price = null, 0f, D.quantity * D.price))", "")
+        if (result.next()) then
+         quantity = result.getField(0).getFloat()
+         cost = result.getField(1).getFloat()
+        endif
+        result.close()
+      endif
+    endif
+    getAggregatedValues = series("x", 0, 0, 1).select("quantity, cost, takeDealValues, now() - ts duration")    
+endfunc
+
+function getAggregatedValuesGas(Integer dealID, Integer priceID, Float pricePerUnit, Timestamp tsFrom, Timestamp tsUntil, Boolean takeDealValues, Float quantity, Float cost) : Reader
+    Timestamp ts = now()
+    if not takeDealValues then
+       quantity = 0
+       cost = 0 
+       Long tsid = get5000TSGas(dealID)
+       // Im Gas kommen schon die Stundenwerte im Lastfluss
+       Reader r1 = getTimeseriesValues66(conf.pfmGas, tsid, tsFrom, tsUntil).select("tstamp_ts D.ts, value D.quantity").ValueBuffer()
+       if (priceID = null) then
+        Reader r2 = r1.aggregateLocal("total(D.quantity)", "")
+        if (r2.next()) then
+           quantity = r2.getField(0).getFloat()
+           cost = quantity * pricePerUnit
+        endif
+        r2.close()
+      else
+        Reader rPrice = getTimeseriesValues66(conf.pfmGas, priceID, tsFrom, tsUntil).select("tstamp_ts D.tsp, value D.price").ValueBuffer()
+        Reader result = r1
+        result = result.extend(rPrice, null, "D.ts = " + rPrice.getField(0).getName())
+        result = result.aggregateLocal("total(D.quantity), total(if (D.quantity = null or D.price = null, 0f, D.quantity * D.price))", "")
+        if (result.next()) then
+         quantity = result.getField(0).getFloat()
+         cost = result.getField(1).getFloat()
+        endif
+        result.close()
+      endif
+    endif
+    getAggregatedValuesGas = series("x", 0, 0, 1).select("quantity, cost, takeDealValues, now() - ts duration")    
+endfunc
+
+
+
+/**
+ * returns a list of deals bounded to the given time range
+ *@param book the bookID
+ *@param tsFrom start timestamp
+ *@param tsUntil stop timestamp
+ *@param filter optional filter, if you want to use only specific deals.
+ *@return the deals with the "calculated" quantity and price.
+ */
+function getDealsBounded(Integer book, Timestamp tsFrom, Timestamp tsUntil, String filter) : ValueBuffer
+  static String sel = "select ident, id_l, name_s, alias_s, class_l, state_si, buy_si, openclose_si, contractdate_ts, bookident_l, product_s, product_name_s, productfactor_fl,supplystart_ts, supplyend_ts, pricepermwh_fl, quantityinmwh_fl, worth_fl, traderident_l, brokerident_l, tradepartnerident_l, commodity_name_s, pricevaluelist_l, customval9_s, brokercomm_fl from v_sd_deal where bookident_l = ? and supplystart_ts < ? and supplyend_ts > ?"
+  Writer w = sc.prepareQuery(conf.pfm, sel, null)
+  Reader r = w.execute(book, tsUntil, tsFrom)
+  if (filter != null) then
+     r = r.filter(filter)
+  endif
+  r = r.extend(null, "getAggregatedValues(ident, pricevaluelist_l, pricepermwh_fl, tsFrom, tsUntil, supplystart_ts >= tsFrom and supplyend_ts <= tsUntil, quantityinmwh_fl, worth_fl)", null, false)
+  if r = null then
+    r = series("x", 0, 0, -1).select("null as Integer buy_si, null as Float quantity, null as Float cost")
+  endif
+  getDealsBounded = r.ValueBuffer()    
+endfunc
+
+
+Long[] excludedDealClass = new Long {4,6,7,8,12,28,35,37}
+
+function getDeals(Timestamp tsFrom, Timestamp tsUntil, String filter) : ValueBuffer
+  static String sel = "select ident, id_l, name_s, alias_s, class_l, state_si, buy_si, openclose_si, contractdate_ts, bookident_l, product_s, product_name_s, productfactor_fl,supplystart_ts, supplyend_ts, pricepermwh_fl, quantityinmwh_fl, worth_fl, traderident_l, brokerident_l, tradepartnerident_l, commodity_name_s, pricevaluelist_l, customval9_s, brokercomm_fl from v_sd_deal where tradepartnerident_l is not null and supplystart_ts < ? and supplyend_ts > ?"
+  Writer w = sc.prepareQuery(conf.pfm, sel, null)
+
+/*
+1	Forward
+2	Spotmarkt
+3	Ausgleichsenergie
+4	Energietransfer zwischen Büchern
+6	Verbrauchsprognose
+7	Einspeiseprognose
+8	Energietransfer zwischen Büchern (Spotmarkt)
+10	Futures
+12	Bilanzierung
+14	IntraDay / YesterDay
+27	Swap (fixed for floating)
+28	Swap (hausintern)
+30	Monetär
+33	Zertifikat Future (Termin)
+35	Zertifikat Future (hausintern)
+37	CO2-Ausspeiseprognose
+*/
+
+  Reader r = w.execute(tsUntil, tsFrom)
+  r = r.select("%, customval9_s = 'Ja' sleeve")
+  if (excludedDealClass.length > 0) then
+    r = r.filter("not (class_l in excludedDealClass)")
+  endif
+  if (filter != "" and filter != null) then
+      r = r.filter(filter)
+  endif
+
+  // HKN-Geschäfte ohne Strombindung
+  String hknSel = "whenString(product_name_s in conf.HKN,'HKN',  commodity_name_s) commodity_name_s"
+  String sel1 = pattern("%s", r.desc().select("whenString(NAME='commodity_name_s', hknSel, NAME)"))
+  r = r.select(sel1)
+ 
+  
+  Error error
+//  r = r.filter("not (supplystart_ts >= tsFrom and supplyend_ts <= tsUntil)").next(13)
+  try
+    r = r.extend(null, "getAggregatedValues(ident, pricevaluelist_l, pricepermwh_fl, tsFrom, tsUntil, supplystart_ts >= tsFrom and supplyend_ts <= tsUntil, quantityinmwh_fl, worth_fl)", null, false)
+  catch error
+    logError("Error in getDeals: deal = " + r.ident + ", tsFrom = " + tsFrom.asString() + ", tsUntil = " + tsUntil.asString())
+    throw error
+  endtry
+  ValueBuffer vb = r.ValueBuffer()  
+  
+  // jetzt müssen noch die HKN Geschäfte, die mit Strom gekoppelt sind, generiert werden:
+
+  ValueBuffer vb1 = vb.Reader().filter("brokerident_l = " + getGreenPowerFeeInstance()).ValueBuffer()
+  vb1.updateWhere("cost", "brokercomm_fl * quantity", "true")
+  vb1.updateWhere("commodity_name_s", "'HKN'", "true")
+  
+  
+  
+  getDeals = (vb.Reader() + vb1.Reader()).ValueBuffer()
+  
+endfunc
+
+/**
+ *
+ *@param tsFrom erwartet wird ein 00:00 Uhr Zeitstempel, der auf 6 Uhr verändert wird
+ *@param tsUntil
+ *@param filter
+ *@return
+ */
+function getDealsGas(Timestamp tsFrom, Timestamp tsUntil, String filter) : ValueBuffer
+  static String sel = "select ident, id_l, name_s, alias_s, class_l, state_si, buy_si, openclose_si, contractdate_ts, bookident_l, product_s, product_name_s, productfactor_fl,supplystart_ts, supplyend_ts, pricepermwh_fl, quantityinmwh_fl, worth_fl, traderident_l, brokerident_l, tradepartnerident_l, commodity_name_s, pricevaluelist_l, customval9_s, brokercomm_fl from v_sd_deal where tradepartnerident_l is not null and supplystart_ts < ? and supplyend_ts > ?"
+  Writer w = sc.prepareQuery(conf.pfmGas, sel, null)
+
+/*
+1	Forward
+2	Spotmarkt
+3	Ausgleichsenergie
+4	Energietransfer zwischen Büchern
+6	Verbrauchsprognose
+7	Einspeiseprognose
+8	Energietransfer zwischen Büchern (Spotmarkt)
+10	Futures
+12	Bilanzierung
+14	IntraDay / YesterDay
+27	Swap (fixed for floating)
+28	Swap (hausintern)
+30	Monetär
+33	Zertifikat Future (Termin)
+35	Zertifikat Future (hausintern)
+37	CO2-Ausspeiseprognose
+*/
+
+  tsFrom = tsFrom + hour(6)
+  tsUntil = tsUntil + hour(6)
+
+  Reader r = w.execute(tsUntil, tsFrom)
+  r = r.select("%, customval9_s = 'Ja' sleeve")
+  if (excludedDealClass.length > 0) then
+    r = r.filter("not (class_l in excludedDealClass)")
+  endif
+  if (filter != "" and filter != null) then
+      r = r.filter(filter)
+  endif
+
+  // HKN-Geschäfte ohne Strombindung
+  String hknSel = "whenString(product_name_s in conf.HKN,'HKN',  commodity_name_s) commodity_name_s"
+  String sel1 = pattern("%s", r.desc().select("whenString(NAME='commodity_name_s', hknSel, NAME)"))
+  r = r.select(sel1)
+ 
+  
+  Error error
+//  r = r.filter("not (supplystart_ts >= tsFrom and supplyend_ts <= tsUntil)").next(13)
+  try
+    r = r.extend(null, "getAggregatedValuesGas(ident, pricevaluelist_l, pricepermwh_fl, tsFrom, tsUntil, supplystart_ts >= tsFrom and supplyend_ts <= tsUntil, quantityinmwh_fl, worth_fl)", null, false)
+  catch error
+    logError("Error in getDeals: deal = " + r.ident + ", tsFrom = " + tsFrom.asString() + ", tsUntil = " + tsUntil.asString())
+    throw error
+  endtry
+  ValueBuffer vb = r.ValueBuffer()  
+  
+  getDealsGas = vb
+endfunc
+
+
+function getDealsDAC(Timestamp tsFrom, Timestamp tsUntil, String filter) : Integer
+    dac.addReader("getDealsDAC", getDeals(tsFrom, tsUntil, filter))
+endfunc
+
+function getDeals(Integer startYear, Integer count) : ValueBuffer
+    Integer i 
+    Reader result
+    for i = 1 to count step 1
+      result = result + getDeals(date(startYear + i - 1,1,1), date(startYear+i,1,1), null).select(stri(startYear + i - 1) + " year, %")
+    next
+    getDeals = result.ValueBuffer()
+endfunc
+
+function getDealsGas(Integer startYear, Integer count) : ValueBuffer
+    Integer i 
+    Reader result
+    for i = 1 to count step 1
+      result = result + getDealsGas(date(startYear + i - 1,1,1), date(startYear+i,1,1), null).select(stri(startYear + i - 1) + " year, %")
+    next
+    getDealsGas = result.ValueBuffer()
+endfunc
+
+
+
+function getTradeClassOverview(ValueBuffer deals) : ValueBuffer
+  let r1 = deals.Reader().aggregate("tradepartnerident_l, class_l, total(quantity) quantity, total(cost) cost", "tradepartnerident_l, class_l")
+  let r2 = r1.rowCol("tradepartnerident_l", "class_l", "round(quantity,1) q, round(cost,1) c")
+  let vb1 = r2.select("getTradePartner(tradepartnerident_l) tradePartner, tradepartnerident_l, class%").ValueBuffer()
+  getTradeClassOverview = vb1.Reader().changeColNames(2, r2.getColClasses().select("getDealClass(class_l) name, class_l").select("name + '(' + class_l + ') quantity' name", {"name  + '(' + class_l + ') cost'"})).ValueBuffer()
+endfunc
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Berechnung und Einbeziehung der Limits:
+
+function getYear(Integer handelsJahr, Integer jahr) : String
+  if (jahr - handelsJahr) <= 1 then
+    getYear = "A_Handelsjahr_Frontjahr"
+  else
+    getYear = "B_Frontjahr" + (jahr - handelsJahr - 1)
+  endif
+endfunc
+
+DataDict dLimitDist = new DataDict()
+dLimitDist.set("Spot only (Day-ahead)", new Integer {100,0,0,0,0})
+dLimitDist.set("größer 24 Monate", new Integer {60,25,10,5})
+dLimitDist.set("kleiner 1 Monat", new Integer {100,0,0,0})
+dLimitDist.set("kleiner 12 Monate", new Integer {100,0,0,0})
+dLimitDist.set("kleiner 24 Monate", new Integer {60,40,0,0})
+dLimitDist.set("kleiner 3 Monate", new Integer {100,0,0,0})
+
+
+function getLimitDelta(String taZR, Float limit, Integer ix, Float value) : Float
+    if value = null then
+      getLimitDelta = null    
+    else
+      Object obj = dLimitDist.get(taZR)
+      if obj = null then
+        getLimitDelta = null
+      else
+        Long[] distr = obj as Long[]
+        getLimitDelta = round(distr[ix] / 100 * limit - value,2)
+      endif
+    endif
+endfunc
+
+function getLimit(String taZR, Float limit, Integer ix) : Float
+      Object obj = dLimitDist.get(taZR)
+      if obj = null then
+        getLimit = null
+      else
+        Long[] distr = obj as Long[]
+        Float result = round(distr[ix] / 100 * limit,2)
+        if result = 0 then
+            result = null
+        endif
+        getLimit = result
+      endif
+endfunc
+
+ValueBuffer vbDealsYear
+ValueBuffer vbLimits
+ValueBuffer _debugvb1
+ValueBuffer _debugvb2
+
+// Integer startYear = 2016
+
+function calculateLimits(Integer startYear) : ValueBuffer
+  vbDealsYear = (getDeals(startYear, 5).Reader() + getDealsGas(startYear, 5).Reader()).ValueBuffer()
+  ValueBuffer vb1 = getTradePartnerMetaDataStromGas(now()).select("ident_tradepartner_strom, ident_tradepartner_gas, name_s, alias_s, translateKonzernLimit(Konzernlimit) limit, Transaktionszeitraum").ValueBuffer()
+  
+  ValueBuffer vb2 = vbDealsYear.rowCol("name_s", "getYear(startYear, year) j", "total(cost) cost"). &
+      select("name_s, j_A_Handelsjahr_Frontjahr_cost HaFr, j_B_Frontjahr1_cost Fr1, j_B_Frontjahr2_cost Fr2, j_B_Frontjahr3_cost Fr3").ValueBuffer()
+ 
+  _debugvb1 = vb1
+  _debugvb2 = vb2
+ 
+  vbLimits = leftJoin(vb1, null, vb2, null, "name_s", "name_s"). &
+      select("name_s, alias_s, limit, Transaktionszeitraum, HaFr, Fr1, Fr2, Fr3"). &
+      select("%, getLimitDelta(Transaktionszeitraum, limit, 0, HaFr) remainingLimitHaFr, getLimitDelta(Transaktionszeitraum, limit, 1, Fr1) remainingLimitFr1,getLimitDelta(Transaktionszeitraum, limit, 2, Fr2) remainingLimitFr2,getLimitDelta(Transaktionszeitraum, limit, 3, Fr3) remainingLimitFr3, getLimit(Transaktionszeitraum, limit, 0) limitHaFr, getLimit(Transaktionszeitraum, limit, 1) limitFr1,getLimit(Transaktionszeitraum, limit, 2) limitFr2,getLimit(Transaktionszeitraum, limit, 3) limitFr3"). &
+      ValueBuffer()
+   calculateLimits = vbLimits 
+endfunc
+
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+function getCurrentDealValuePower(Integer deal, Timestamp tsFrom, Timestamp tsUntil) : Reader
+  static String sql = "select prices_l, start_ts, end_ts from deal where ident = ? and end_ts > ? and start_ts <= ?"
+  Writer w = sc.prepareQuery(conf.pfm, sql, null)  
+  Reader r = w.execute(deal, tsFrom, tsUntil)
+  if r.next() then
+    if tsFrom < r.start_ts then
+        tsFrom = r.start_ts
+    endif
+    if tsUntil > r.end_ts then
+        tsUntil = r.end_ts
+    endif
+    ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").select("ts, 0.0f quantity, 0.0f cost, 0 count").ValueBuffer()
+    // Aktuellste HPFC
+    Integer priceTS = conf.currentHPFC
+    
+    Integer quantity = get5000TS(deal)
+    Reader r1 = getTimeseriesValues66(conf.pfm, quantity, tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.ts, value D.quantity").ValueBuffer()
+    Reader r2 = getTimeseriesValues66(conf.pfm, priceTS, tsFrom, tsUntil).select("tstamp_ts D.tsp, value D.price").ValueBuffer()
+    Reader result = vbTS.Reader().extend(r1, null, "ts = " + r1.getField(0).getName())
+    result = result.extend(r2, null, "ts = " + r2.getField(0).getName())
+    result = result.select("%, if (D.quantity = null or D.price = null, 0f, D.quantity * D.price) D.cost")  
+    getCurrentDealValuePower = result.select("ts, quantity + if(D.quantity=null, 0f, D.quantity) quantity, cost + D.cost cost")
+  endif
+  r.close()
+endfunc
+
+
+// currently just a copy from Power!!!
+function getCurrentDealValueGas(Integer deal, Timestamp tsFrom, Timestamp tsUntil) : Reader
+  static String sql = "select prices_l, start_ts, end_ts from deal where ident = ? and end_ts > ? and start_ts <= ?"
+  Writer w = sc.prepareQuery(conf.pfmGas, sql, null)  
+  Reader r = w.execute(deal, tsFrom, tsUntil)
+  if r.next() then
+    if tsFrom < r.start_ts then
+        tsFrom = r.start_ts
+    endif
+    if tsUntil > r.end_ts then
+        tsUntil = r.end_ts
+    endif
+    ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").select("ts, 0.0f quantity, 0.0f cost, 0 count").ValueBuffer()
+    // Aktuellste HPFC
+    Integer priceTS = conf.currentHPFC
+    
+    Integer quantity = get5000TS(deal)
+    Reader r1 = getTimeseriesValues66(conf.pfm, quantity, tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select("tstamp_ts D.ts, value D.quantity").ValueBuffer()
+    Reader r2 = getTimeseriesValues66(conf.pfm, priceTS, tsFrom, tsUntil).select("tstamp_ts D.tsp, value D.price").ValueBuffer()
+    Reader result = vbTS.Reader().extend(r1, null, "ts = " + r1.getField(0).getName())
+    result = result.extend(r2, null, "ts = " + r2.getField(0).getName())
+    result = result.select("%, if (D.quantity = null or D.price = null, 0f, D.quantity * D.price) D.cost")  
+    getCurrentDealValueGas = result.select("ts, quantity + if(D.quantity=null, 0f, D.quantity) quantity, cost + D.cost cost")
+  endif
+  r.close()
+endfunc
+
+
+
+
+Reader rEmpty = series("x", 0,-1,1).select("0.0f recoveryQuantity, 0.0f recoveryCost").ValueBuffer()
+
+
+/**
+ * Ermittlung der CO2 Preise für ein Jahr.
+ *@param year the year for which the price is being asked for
+ *@return the price. If the system has no price value, it will return NAN
+ */
+function getCarbonDioxidePrice(Integer year) : Float
+  static DataDict d = new DataDict()
+  Float result = d.getFloat(stri(year))
+  if result = null then
+    B3Instance bi = new B3Instance()
+    DBQuery q = bi.filter("Instance.table_no_l = 15018 and Instance.name_s = 'EEX CO2'").getParameterList().getTimeseriesList().filter("Timeseries.name_s = 'FEUA_" + year + ".12'")
+    Reader r = q.select(conf.pfm, "Timeseries.ident", "")     
+//     Reader r = conf.pfm.select("ts_valuelist.* from stationbase, entrypara, ts_valuelist where stationbase.table_no_l = 15018 and stationbase.name_s = 'EEX CO2' and entrypara.mst_l = stationbase.ident and ts_valuelist.stationchannel_l = entrypara.ident and ts_valuelist.name_s = 'FEUA_" + year + ".12'")
+    getCarbonDioxidePrice = null
+    if not r.next() then
+       r.close()
+      throw runtimeError(format("Price time series for Carbon Dioxide not found for year %d", year))
+    endif
+    r.close()    
+    result = getTimeseriesValues66(conf.pfm, r.ident, null, null).filter("state_l != 268435456L and value0_fl != 0").last(1).do("value0_fl")
+    if result = null then
+        throw runtimeError("Price time series for Carbone Dioxide has no values for " + year)
+    endif
+    d.setFloat(stri(year), result)
+  endif
+  getCarbonDioxidePrice = result
+endfunc
+
+function getCurrentDealValueCarbonDioxide(Integer deal) : Reader
+  static String sql = "select start_ts, worthinmwh_fl from deal where ident = ?"
+  Writer w = sc.prepareQuery(conf.pfm, sql, null)  
+  Reader r = w.execute(deal)
+  // recoveryQuantity, recoveryCost  
+
+  if r.next() then
+      Float quantity = r.worthinmwh_fl
+      Float price = getCarbonDioxidePrice((r.start_ts as Timestamp).year()) * quantity
+      getCurrentDealValueCarbonDioxide = series("x", 0, 0,1).select("quantity recoveryQuantity, price recoveryCost")
+  else
+      getCurrentDealValueCarbonDioxide = rEmpty
+  endif
+  r.close()
+endfunc
+
+// Integer year = 2018
+// Timestamp current = now()
+
+/**
+ * Bestimme den Kohlepreis für ein Jahr aus der Sicht, was man in "current" wissen kann.
+ *@param current der Stichtag
+ *@return der Preis. Wenn year < now().year(), dann kann der hypotetische Preis nicht mehr ermittelt werden.
+ */
+function getCoalPrice(Integer year, Timestamp current) : Float
+  static DataDict d = new DataDict()
+  Integer relativeYear = year - now().year()
+  if (relativeYear < 0) then
+    getCoalPrice = ln(-1)          
+  elseif d.get(stri(year)) != null then
+    getCoalPrice = d.get(stri(year))  
+  else
+    String name
+    if relativeYear = 0 then
+      name = "API2 Frontjahr" 
+    else
+      name = "API2 Frontjahr +" + relativeYear
+    endif
+    Reader r = conf.pfm.select("ts_valuelist.* from stationbase, entrypara, ts_valuelist where stationbase.table_no_l = 15018 and stationbase.name_s = 'ARGUS_Kohle' and entrypara.mst_l = stationbase.ident and ts_valuelist.stationchannel_l = entrypara.ident and ts_valuelist.name_s = '" + name + "'")
+    Float result = null
+    if r.next() then
+       result = getTimeseriesValues66(conf.pfm, r.ident, null, null).filter("state_l != 268435456L and value0_fl != 0 and tstamp_ts <= current").last(1).do("value0_fl")
+    endif
+    r.close()
+    if result = null then
+        result = ln(-1) // not a number
+    endif
+    d.setFloat(stri(year), result)
+    getCoalPrice = result
+  endif
+endfunc
+
+function getCurrentDealValueCarbon(Integer deal, Timestamp current) : Reader
+  static String sql = "select start_ts, worthinmwh_fl from deal where ident = ?"
+  Writer w = sc.prepareQuery(conf.pfm, sql, null)  
+  Reader r = w.execute(deal)
+  // recoveryQuantity, recoveryCost  
+
+  if r.next() then
+      if (r.start_ts as Timestamp).year() <= current.year() then
+        getCurrentDealValueCarbon = series("x", 0, 0, 1).select("0.0f recoveryQuantity, 0.0f recoveryCost")
+      else
+        Float quantity = r.worthinmwh_fl
+        Float price = getCoalPrice(r.start_ts, current) * quantity        
+        getCurrentDealValueCarbon = series("x", 0, 0,1).select("quantity recoveryQuantity, price recoveryCost")
+      endif
+  else
+      getCurrentDealValueCarbon = rEmpty
+  endif
+  r.close()
+endfunc
+
+
+
+function getCurrentDealValueAggregated(Integer deal, Timestamp supplyEnd, String commodity, Timestamp tsFrom, Timestamp tsUntil) : Reader
+    if commodity = "CO2" then
+      getCurrentDealValueAggregated = getCurrentDealValueCarbonDioxide(deal)   
+    elseif commodity = "Kohle" then
+      getCurrentDealValueAggregated = getCurrentDealValueCarbon(deal, now())     
+    elseif (supplyEnd < tsFrom or commodity != "Strom" or tsFrom >= tsUntil) then
+      getCurrentDealValueAggregated = rEmpty    
+    else
+      Reader r = getCurrentDealValuePower(deal, tsFrom, tsUntil)
+      getCurrentDealValueAggregated = r.aggregate("total(quantity) recoveryQuantity, total(cost) recoveryCost", "").select("round(recoveryQuantity,1) recoveryQuantity, round(recoveryCost,1) recoveryCost")
+    endif
+endfunc
+
+
+/**
+ * Bestimmung der Wiederbeschaffungskosten
+ *@param tsFrom Startbereich für die Geschäfte
+ *@param tsUntil Endbereich für die Geschäfte
+ *@param currentDate Stichtag, für den die Wiederbeschaffungskosten bestimmt werden sollen
+ *@return Reader mit allen Deals und der zusätzlichen Spalte "recovery"
+ */
+function getRecoveryCost(Timestamp tsFrom, Timestamp tsUntil, Timestamp currentDate) : Reader
+  if (tsUntil < currentDate) then
+    throw runtimeError("currentDate must not be behind tsUntil")
+  endif
+  ValueBuffer vb = getDeals(tsFrom, tsUntil, "")
+  getRecoveryCost = vb.Reader().extend(null, "getCurrentDealValueAggregated(ident, supplyend_ts, commodity_name_s, currentDate, tsUntil)", null, true)
+endfunc
+
+
+function getRecoveryCostAggregated(Timestamp tsFrom, Timestamp tsUntil, Timestamp currentDate) : Reader
+  Reader r = getRecoveryCost(tsFrom, tsUntil, currentDate)
+  r = r.filter("quantity <> 0").aggregate("tradepartnerident_l, commodity_name_s, total(quantity) quantity, total(cost) cost, total(recoveryQuantity) recoveryQuantity, total(recoveryCost) recoveryCost","tradepartnerident_l, commodity_name_s")
+  r = r.select("getTradePartner(tradepartnerident_l) tradePartner, tradepartnerident_l, commodity_name_s, round(quantity,1) quantity, round(cost,1) cost, round(recoveryQuantity,1) recoveryQuantity, round(recoveryCost,1) recoveryCost")
+  getRecoveryCostAggregated = r
+endfunc
+
+
+// Integer jahr = 2016
+// Timestamp currentDate = now()
+ValueBuffer _debugr
+function getRecoveryCostAggregated(Integer jahr, Timestamp currentDate) : Reader
+    
+    Reader hafr = getRecoveryCostAggregated(date(jahr, 1, 1), date(jahr + 2, 1, 1), currentDate).select("'hafr ' when, %")
+    Reader hafr1 = getRecoveryCostAggregated(date(jahr + 2, 1, 1), date(jahr + 3, 1, 1), currentDate).select("'fr1' when, %")
+    Reader hafr2 = getRecoveryCostAggregated(date(jahr + 3, 1, 1), date(jahr + 4, 1, 1), currentDate).select("'fr2' when, %")
+    Reader hafr3 = getRecoveryCostAggregated(date(jahr + 4, 1, 1), date(jahr + 5, 1, 1), currentDate).select("'fr3' when, %")
+
+
+
+    Reader result = (hafr + hafr1 + hafr2 + hafr3)
+    result = result
+    getRecoveryCostAggregated = result
+    _debugr = result.ValueBuffer()
+    getRecoveryCostAggregated = _debugr.Reader()
+    
+endfunc
+
+//////////////////////////////////////////////
+/*
+ *  Wiederbeschaffung CO2: 
+ *  Menge: "unsicher" bis Jahresende, die komplette Menge
+ *  Preis Wiederbeschaffung: aktueller Preis für Produkt EEX CO2/FEUA_<jahr>.12, der letzte aktuelle Wert in der Zeitreihe
+ */
+
+//////////////////////////////////////////////
+/*  Wiederbeschaffung Kohle:
+*  Menge: unsicher nur für Zukunft, ab Beginn des Frontjahres
+*  Preis: für das entsprechende Jahr 2017, 2018, 2019; ARGUS/API2 Frontjahr, SPI2 Frontjahr +1, den letzten Tag in der Zeitreihe oder der letzte Tag vor dem Referenztag
+*/
+
+
+
+
+// Reader r1 = _debugr.rowCol("tradePartner, tradepartnerident_l, commodity_name_s", "when", "quantity, cost, recoveryQuantity, recoveryCost").select("tradePartner, tradepartnerident_l, commodity_name_s, when_hafr__quantity hafr_quantity, when_hafr__cost hafr_cost, when_hafr__recoveryQuantity hafr_recoveryQuantity, when_hafr__recoveryCost hafr_recoveryCost, when_fr1__quantity fr1_quantity, when_fr1__cost fr1_cost, when_fr1__recoveryQuantity fr1_recoveryQuantity, when_fr1__recoveryCost fr1_recoveryCost, when_fr2__quantity fr2_quantity, when_fr2__cost fr2_cost, when_fr2__recoveryQuantity fr2_recoveryQuantity, when_fr2__recoveryCost fr2_recoveryCost, when_fr3__quantity fr3_quantity, when_fr3__cost fr_cost, when_fr3__recoveryQuantity fr3_recoveryQuantity, when_fr3__recoveryCost fr3_recoveryCost")
+// r1.desc().index("when
+
+
+function getRecoveryCostAggregatedDAC(Integer jahr, Timestamp currentDate) : Integer
+  dac.setCapacity(100)
+  dac.addReader("getRecoveryCostAggregatedDAC", getRecoveryCostAggregated(jahr, currentDate))    
+endfunc
+
+
+/* test:
+ * let priceInstance = 15312
+ * let appointTS = now()
+ * let what = "Base"
+ * let year = 2017
+ */
+
+/**
+ * determines the most current price for a product (Base, Peak, OffPeak) for a year, seen from
+ * the appointTS
+ *@param priceInstance the price instance
+ *@param appointTS the appoint timestamp
+ *@param what base, peak or offpeak
+ *@param year the year to which we want to read the price
+ *@return the price value
+ */
+function getCalPrice(Integer priceInstance, Timestamp appointTS, String what, Integer year) :  Float
+  B3Instance bi = new B3Instance(priceInstance)
+  String filter = format("Timeseries.name_s = '%s_%d'", what, year)
+  Reader r = bi.getParameterList().getTimeseriesList().filter(filter). &
+      select(conf.pfm, "Timeseries.Ident ts", "")
+  if not r.next() then
+    throw runtimeError(format("Can not find timeseries %s at price instance %d", filter, priceInstance))
+  endif  
+
+  Reader r1 = getTimeseriesValues66(conf.pfm, r.ts, null, appointTS).filter("not isMissing(state_l)").last(1)
+  if not r1.next() then
+    throw runtimeError(format("Price timeseries %s at price instance %d has no values", filter, priceInstance))    
+  endif
+
+
+  getCalPrice = r1.value0_fl
+  r1.close()
+  r.close()
+endfunc  
+
+
+
+
+
+let deal = 9654805
+let tsFrom = date(2017,1,1)
+let tsUntil = date(2018,1,1)
+
+
+//////////////////////////////////////////////////////////////////////
+/*
+  BSE- Kern-Acquisitionen:
+// Basis
+// Prepare:
+
+DataDict d = new DataDict()
+conf.pfm.select("ident, name_s from wk_dealclass").do("d.set(stri(ident), name_s)")
+let tp = new DataDict()
+conf.pfm.select("ident, participant_name_s from tradepartner").do("tp.set(stri(ident), participant_name_s)")
+
+ValueBuffer vb = getDeals(date(2016,1,1), date(2017,1,1), "")
+
+let r = vb.Reader().filter("cost <> null and cost <> 0").select("%, getDealClass(class_l) class_s, getTradePartner(tradepartnerident_l) trade_s").makeRewindable()
+
+// Gesamthandelsvolument in Mio E
+r.aggregate("total(cost) cost", "").do("cost") / 1e6
+
+Float gesamt = r.aggregate("total(cost) cost", "").do("cost")
+
+// Verkaufs und Kaufsvolumen
+r.aggregate("buy_si, total(cost) cost", "buy_si").select("buy_si, cost/1e6 cost")
+
+
+// Alle Handelspartner, Gesamthandelsvolumen und Mengen, Commodities, Sleeve
+r.aggregate("commodity_name_s, sleeve, total(quantity) quantity, total(cost) cost","commodity_name_s, sleeve").select("commodity_name_s, sleeve, round(quantity,1) quantity, round(cost/1e6,3) cost")
+
+
+// Alle Handelspartner, Kauf/Verkauf, Volumen und Mengen, Commodities, Sleeve
+r.aggregate("buy_si, commodity_name_s, sleeve, total(quantity) quantity, total(cost) cost","buy_si, commodity_name_s, sleeve").select("buy_si, commodity_name_s, sleeve, round(quantity,1) quantity, round(cost/1e6,3) cost")
+
+//Gesamthandelsvolumen (Cross-Commodity) in € je Handelspartner und in % vom Gesamtvolumen
+r.aggregate("trade_s, total(cost) cost", "trade_s").select("trade_s, round(cost,0) cost, round(cost/gesamt * 100,1) anteil").sort("cost desc")
+
+// Verkaufsvolumen (Cross-Commodity) in € je Handelspartner
+// Kaufvolumen (Cross-Commodity) in € je Handelspartner
+r.aggregate("trade_s, buy_si, total(cost) cost", "trade_s, buy_si").select("trade_s, buy_si, round(cost,0) cost").transposeGroup("trade_s", "cost", "buy_si", "sell, buy").Reader().sort("(sell + buy) desc")
+
+DataDict dComm = new DataDict()
+r.select("commodity_name_s").selectDistinct().do("dComm.set(commodity_name_s, row)")
+
+String[] sellBuy = {"sell", "buy"}
+String[] quantCost = {"quantity", "cost"}
+String head = pattern("%s", Reader.joinCol(arrayAsReader(sellBuy), null, Reader.joinCol(r.select("commodity_name_s").selectDistinct(),"A",arrayAsReader(quantCost), "B","1","1"), null, "1", "1").select("this.getLine('_') s"))
+
+// Verkaufsvolumen und Mengen  je Handelspartner
+// Kaufvolumen (Cross-Commodity) in € je Handelspartner
+r.aggregate("trade_s, buy_si, commodity_name_s, total(quantity) quantity, total(cost) cost", "trade_s, commodity_name_s, buy_si").select("trade_s, buy_si, commodity_name_s, round(quantity,1) quantity, round(cost,0) cost").transposeGroup("trade_s", "quantity, cost", "buy_si * 2 + dComm.getInteger(commodity_name_s)", head).Reader()
+
+// Oder dieser Ansatz
+let rc = r.rowCol("buy_si, commodity_name_s", "trade_s", "total(quantity) quantity, total(cost) cost")
+let rc = r.rowCol("trade_s", "commodity_name_s,buy_si", "total(quantity) quantity, total(cost) cost")
+
+// ... mit sprechenderen Kopfnamen
+r.rowCol("trade_s", "commodity_name_s,buy_si", "total(quantity) quantity, total(cost) cost", "commodity_name_s + ' ' + sellBuy[buy_si] + '_Q', commodity_name_s + ' ' + sellBuy[buy_si] + '_C'")
+
+   
+ */
+
+
+DataDict d = new DataDict()
+function test() : Reader
+   d.set("tsFrom", date(2016,1,1))
+   d.set("tsUntil", date(2017,1,1))   
+   d.set("book", 2211023)
+//   d.set("book", 2109340)
+//   d.set("book", 2213859)
+   d.set("includeInternal", false)
+   d.set("includeSubBook", true)
+   createBookValues("", null, d)
+   
+   
+   Integer buy
+   Integer dealClass
+   Reader r = null
+   for buy = 0 to 1 step 1 
+     DataDict buySell = new DataDict()
+     for dealClass = 0 to 4 step 1
+       r = r + d.getDataDict(whenString(buy = 0, "sell", "buy")).getDataDict(getDealClassName(dealClass)).asReader()
+     next
+   next
+   ValueBuffer vb = r.select("tsFrom, tsUntil, book, status, includeInternal, buy, dealClass, specificPrice, totalCost, totalQuantity").ValueBuffer()
+   InputStream is = r.save()
+   File f = new File("c:\temp\result.rd")
+   f.openWrite()
+   f.write(is)
+   f.close()
+   test = vb
+   
+let r1 = getTradePartnerOverview(date(2016,1,1), date(2017,1,1))
+r1 = r1.makeRewindable()
+
+r1.aggregate("buy, commodity, total(totalQuantity) totalQuantity, total(totalCost) totalCost, total(count) count", "buy, commodity").select("%, totalCost / totalQuantity specPrice")   
+endfunc
+
+
+
+
+
+// execute test:
+// test()
+// generateShortLong("", null, d)
+// d.remove("longShort")
+// d.longShort.asReader().select("dc, round(short,0) short, round(long,0) long, round(long - short,0) diff")

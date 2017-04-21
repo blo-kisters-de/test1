@@ -1,0 +1,408 @@
+include /Project/bvag/util.kis
+include /project/bvag/StatementCache.kis
+
+// DBConnection cb3 = createOraConnection("adbelvispfmstrom1", "12years", "oracle-12c-srv-n:1521:bel321")
+
+
+// the idea:
+// the data dictionary holds all different items for one group. 
+struc ListDistinct
+  DataDict d
+endstruc
+
+// we prepare by creating a new DataDict. This will be called, if a new group is being created
+function ListDistinct.prepare(ListDistinct ld): Integer
+  ld.d = new DataDict()
+endfunc
+
+
+// this function is being executed for each element within a group
+// the data dict object ensures to store only one representant for equal objects.
+function ListDistinct.execute(ListDistinct ld, Object key) : Integer
+  if key <> null then
+    ld.d.setObject(key, key)
+  endif
+endfunc
+
+
+// at the end we generate the list with the result as a String
+function ListDistinct.done(ListDistinct ld) : String
+    ListDistinct.done = pattern("%s", ld.d.asReader().ValueBuffer().transpose(null, 0, -1, 0, -1, 1))
+endfunc		
+
+
+addGroupFunction("listDistinct", "ListDistinct")
+
+// the idea:
+// the data dictionary holds all different items for one group. 
+struc ListDistinct1
+  DataDict d
+endstruc
+
+// we prepare by creating a new DataDict. This will be called, if a new group is being created
+function ListDistinct1.prepare(ListDistinct1 ld): Integer
+  ld.d = new DataDict()
+endfunc
+
+
+// this function is being executed for each element within a group
+// the data dict object ensures to store only one representant for equal objects.
+function ListDistinct1.execute(ListDistinct1 ld, String key) : Integer
+  if key <> null then
+    String[] s = split(key, ",")
+    Integer i
+    for i = 0 to s.length -1 step 1
+      ld.d.setString(trim(s[i]), trim(s[i]))
+    next
+  endif
+endfunc
+
+
+// at the end we generate the list with the result as a String
+function ListDistinct1.done(ListDistinct1 ld) : String
+    ListDistinct1.done = pattern("%s", ld.d.asReader().ValueBuffer().transpose(null, 0, -1, 0, -1, 1))
+endfunc		
+
+
+addGroupFunction("listDistinct1", "ListDistinct1")
+
+
+// Read Timeseries:
+/*
+
+c6.select("te_timeseries.ident, te_timeseries.type_l, zeitklasse.name_s, valuelist.ident, valuelist.name_s, valuelist.stationchannel_l 
+  from te_timeseries, tc_ts, zeitklasse, valuelist 
+  where 
+    te_timeseries.ident = tc_ts.timeseries_l and 
+    tc_ts.timeclass_l = zeitklasse.ident and 
+    zeitklasse.complextsid_l = valuelist.tsid_l")
+ 1 = tsd_remarks (secondary)
+ 2 = tsd_nmin
+ 3 = tsd_ip
+ 5 = TSD_DSDIP
+ 7  = TSD_DSDDAY
+ 33 = tsd_wnmin195
+ 35 = tsd_long (secondary container)
+ 36 = tsd_kennwert
+
+ 34 = Cotimese
+ 63 = KTs_RelSkKwSeries, // Rating Curve Mapping for Gaugings. RELSKKW
+
+ ts_genericts:
+ 65 = tsd_meanvalues (3), tsd_dsdip (1)
+ 67 = tsd_meanvalues (3), TSD_GAUGING (10), TSD_TOTAL2TS (18), 
+
+
+ */
+Integer row = 0
+
+// Unit of the measurement grid: 0 = milliseconds, 1 = seconds, 2 = minutes, 3 = hours, 4 = days, 5 = months, 6 = years, not all may be used.   
+function getGrid(Integer intervalCount, Integer intervalUnit) : Integer
+  if intervalUnit = 0 then
+     getGrid = intervalCount
+  elseif intervalUnit = 1 then
+     getGrid = second(intervalCount)
+  elseif intervalUnit = 2 then
+     getGrid = minute(intervalCount)
+  elseif intervalUnit = 3 then
+     getGrid = hour(intervalCount)
+  elseif intervalUnit = 4 then
+     getGrid = day(intervalCount)
+  else
+     throw runtimeError("invalid value for intervalUnit: " + intervalUnit)     
+  endif
+endfunc
+
+function getTimeseriesValuesFromContainer66(DBConnection cb3, Integer type, Integer id, Integer intervalCount, Integer intervalUnit, Timestamp tsFrom, Timestamp tsUntil) : Reader
+//    throw runtimeError(": " + type + " " + id)
+
+    String filter = ""
+    if (tsFrom != null) then
+       if type = 33 then 
+          filter = " and tstamp_ts > " + getSQLTimestamp(cb3, tsFrom - day(4), "GMT+1")
+       else
+          filter = " and tstamp_ts > " + getSQLTimestamp(cb3, tsFrom, "GMT+1") 
+       endif    
+    endif
+    if (tsUntil != null) then
+       if filter != null then
+          filter = filter + " and "
+       endif
+       filter = filter + "tstamp_ts <= " +  getSQLTimestamp(cb3, tsUntil, "GMT+1")
+    endif
+    if type = 2 then
+      getTimeseriesValuesFromContainer66 = cb3.select("* from tsd_nmin where timeseries_l = " + id + filter + " order by tstamp_ts")
+    elseif type = 3 then
+      getTimeseriesValuesFromContainer66 = cb3.select("* from tsd_ip where timeseries_l = " + id + filter + " order by tstamp_ts")
+    elseif type = 5 then
+      getTimeseriesValuesFromContainer66 = cb3.select("* from tsd_dsdip where timeseries_l = " + id + filter + " order by tstamp_ts")
+    elseif type = 7 then
+      getTimeseriesValuesFromContainer66 = cb3.select("* from tsd_dsdday where timeseries_l = " + id + filter + " order by tstamp_ts")
+    elseif type = 33 then
+      Integer distance = getGrid(intervalCount, intervalUnit)
+      String[] s = split(pattern("tstamp_ts + %1$dL, value%2$d, status%2$d", "#tstamp_ts + %1$dL, value%2$d, status%2$d", series("x", 2, 96, 1).select("(x-1) mul distance, x")), "#")
+      Reader r = cb3.select("* from tsd_wnmin195 where timeseries_l = " + id + filter + " order by tstamp_ts"). &
+          select("tstamp_ts, value1 value, status1 status", s). &
+          filter("value != null")
+          if tsFrom <> null and tsUntil <> null then
+             getTimeseriesValuesFromContainer66 = r.filter("tstamp_ts > tsFrom and tstamp_ts <= tsUntil")
+          elseif (tsFrom != null) then
+             getTimeseriesValuesFromContainer66 = r.filter("tstamp_ts > tsFrom")
+          elseif tsUntil != null then
+             getTimeseriesValuesFromContainer66 = r.filter("tstamp_ts <= tsUntil")
+          else 
+             getTimeseriesValuesFromContainer66 = r
+          endif
+    elseif type = 35 then
+      getTimeseriesValuesFromContainer66 = cb3.select("* from tsd_long where timeseries_l = " + id + filter + " order by tstamp_ts")
+    elseif type = 36 then
+      getTimeseriesValuesFromContainer66 = cb3.select("* from tsd_kennwert where timeseries_l = " + id + filter + " order by tstamp_ts")
+    elseif type = 65 or type = 67 then
+      String container = cb3.select("ts_generic.name_s from ts_generic, ts_genericts where ts_generic.ident = ts_genericts.generic_l and ts_genericts.ident = " + id).do("name_s")
+      getTimeseriesValuesFromContainer66 = cb3.select(format("* from %s where timeseries_l = %d " + filter + " order by tstamp_ts", container, id))
+    endif
+endfunc
+
+
+function createWriterGeneric(DBConnection cb3, String sqlTable) : Writer[]
+    static String[] tsc_par3 = {"Integer", "String", "String"}
+    static String[] tsc_par2 = {"Integer", "String"}
+    static String[] tsc_par1 = {"Integer"}
+    static DataDict dC = new DataDict()
+    DataDict d = dC.get((cb3 as Object).asString())
+    if d = null then
+       d = new DataDict()
+       dC.set((cb3 as Object).asString(), d)
+    endif
+    Writer[] w = d.get(sqlTable) as Writer[]
+    if w = null then
+      w = new Writer[4]
+      w[0] = cb3.prepareQuery(format("select * from %s where timeseries_l = ? and tstamp_ts > to_date(?, 'YYYY-mm-dd HH24:MI:SS') and tstamp_ts <= to_date(?, 'YYYY-mm-dd HH24:MI:SS') order by tstamp_ts", sqlTable), arrayAsReader(tsc_par3))
+      w[1] = cb3.prepareQuery(format("select * from %s where timeseries_l = ? and tstamp_ts > to_date(?, 'YYYY-mm-dd HH24:MI:SS') order by tstamp_ts", sqlTable), arrayAsReader(tsc_par3))
+      w[2] = cb3.prepareQuery(format("select * from %s where timeseries_l = ? and tstamp_ts <= to_date(?, 'YYYY-mm-dd HH24:MI:SS') order by tstamp_ts", sqlTable), arrayAsReader(tsc_par2))
+      w[3] = cb3.prepareQuery(format("select * from %s where timeseries_l = ? ", sqlTable), arrayAsReader(tsc_par1))
+      d.set(sqlTable,w)
+    endif
+    createWriterGeneric = w
+endfunc
+
+
+function createTSWriter(DBConnection cb3, Integer typ) : Writer[]
+    Writer[] w
+    if typ = 2 or typ = 60 then
+      w = createWriterGeneric(cb3, "tsd_nmin")  
+    elseif typ = 3 then
+      w = createWriterGeneric(cb3, "tsd_ip")    
+    elseif typ = 5 then
+      w = createWriterGeneric(cb3, "tsd_dsdip")      
+    elseif typ = 7 then
+      w = createWriterGeneric(cb3, "tsd_dsdday")      
+    elseif typ = 33 then
+      w = createWriterGeneric(cb3, "tsd_wnmin195")        
+    elseif typ = 35 then
+      w = createWriterGeneric(cb3, "tsd_long")        
+    elseif typ = 36 then
+      w = createWriterGeneric(cb3, "tsd_kennwert")        
+    endif
+    createTSWriter = w
+endfunc    
+
+function Writer.execute(Writer this, Object[] data) : Object
+    Integer i
+    for i = 0 to data.length - 1 step 1
+       this.setObject(i, data[i])
+    next
+    Writer.execute = this.execute()
+endfunc
+
+function getTimeseriesValuesFromContainer66UsePS(DBConnection cb3, Integer type, Integer id, Integer intervalCount, Integer intervalUnit, Timestamp tsFrom, Timestamp tsUntil) : Reader
+    Integer paras = 1
+    if tsFrom != null then
+      paras = paras + 1
+    endif
+    if tsUntil != null then
+      paras = paras + 1
+    endif
+    Object[] parameter = new Object[paras]
+    parameter[0] = id
+    Integer useWriter = 3
+    if (tsFrom != null) then
+       useWriter = 1
+       if type = 33 then 
+          parameter[1] = getSQLTimestamp1(cb3, tsFrom - day(4), "GMT+1")
+       else
+          parameter[1] = getSQLTimestamp1(cb3, tsFrom, "GMT+1") 
+       endif    
+    endif
+    if (tsUntil != null) then
+       if tsFrom != null then
+          useWriter = 0
+          parameter[2] = getSQLTimestamp1(cb3, tsUntil, "GMT+1")
+       else
+          useWriter = 2
+          parameter[1] = getSQLTimestamp1(cb3, tsUntil, "GMT+1")
+       endif
+    endif
+    Writer[] w
+    if type = 2 or type = 3 or type = 5 or type = 7 or type = 35 or type = 36 or type = 60 then
+      w = createTSWriter(cb3, type)
+      getTimeseriesValuesFromContainer66UsePS = w[useWriter].execute(parameter)
+    elseif type = 33 then
+      w = createTSWriter(cb3, 33)
+      Integer distance = getGrid(intervalCount, intervalUnit)
+      String[] s = split(pattern("tstamp_ts + %1$dL, value%2$d, status%2$d", "#tstamp_ts + %1$dL, value%2$d, status%2$d", series("x", 2, 96, 1).select("(x-1) mul distance, x")), "#")
+      Reader r = w[useWriter].execute(parameter).asReader(). &
+          select("tstamp_ts, value1 value, status1 status", s). &
+          filter("value != null")
+          if tsFrom <> null and tsUntil <> null then
+             getTimeseriesValuesFromContainer66UsePS = r.filter("tstamp_ts > tsFrom and tstamp_ts <= tsUntil")
+          elseif (tsFrom != null) then
+             getTimeseriesValuesFromContainer66UsePS = r.filter("tstamp_ts > tsFrom")
+          elseif tsUntil != null then
+             getTimeseriesValuesFromContainer66UsePS = r.filter("tstamp_ts <= tsUntil")
+          else 
+             getTimeseriesValuesFromContainer66UsePS = r
+          endif
+    elseif type = 65 or type = 67 then
+      String container = cb3.select("ts_generic.name_s from ts_generic, ts_genericts where ts_generic.ident = ts_genericts.generic_l and ts_genericts.ident = " + id).do("name_s")
+      getTimeseriesValuesFromContainer66UsePS = createWriterGeneric(cb3, container)[useWriter].execute(parameter).asReader()
+    endif
+endfunc
+
+
+
+/**
+ * 
+ *@param valuelistID
+ *@param exceptionalOffset [0] = offset in milliseconds, [1] = offset in months, null => no exceptional offset.
+ *@return a Reader with time series values.
+ */
+function getTimeseriesValues66(DBConnection cb3, Long valuelistID, Timestamp tsFrom, Timestamp tsUntil) : Reader
+  Writer w1 = sc.prepareQuery(cb3, "select ts_timeseries.ident tsid, ts_timeseries.type_l, ts_valuelist.ident vlid, ts_valuelist.name_s, ts_valuelist.stationchannel_l, ts_valuelist.rtimelevel_l, ts_valuelist.rclasstype_l, ts_valuelist.start_ts, ts_valuelist.offset_l, ts_valuelist.rinterval_t_unit_l, ts_valuelist.interval_t_count_l &
+  from ts_timeseries, ts_valuelist &
+  where &
+    ts_timeseries.valuelist_l = ts_valuelist.ident and ts_valuelist.ident = ? order by ts_timeseries.ident", series("x", 0, 0, 1).select("'Long'"))
+  logInfo(format("getTimeseriesValues66(%d, %s, %s)", valuelistID, tsFrom.asString(), tsUntil.asString()))
+  Field f = null
+  Reader r1
+  Reader result
+//  Reader r = cb3.select("ts_timeseries.ident tsid, ts_timeseries.type_l, ts_valuelist.ident vlid, ts_valuelist.name_s, ts_valuelist.stationchannel_l, ts_valuelist.rtimelevel_l, ts_valuelist.rclasstype_l, ts_valuelist.start_ts, ts_valuelist.offset_l, ts_valuelist.rinterval_t_unit_l, ts_valuelist.interval_t_count_l 
+//  from ts_timeseries, ts_valuelist 
+//  where 
+//    ts_timeseries.valuelist_l = ts_valuelist.ident and ts_valuelist.ident = " + valuelistID + " order by ts_timeseries.ident")
+  Reader r = w1.execute(valuelistID)
+  if r.next() then
+    row = row + 1  
+    dac.addString("getTimeseriesValues", stri(row) + ": " + r.getField(3).getString() + " " + r.getField(2).getString()) 
+    Integer type = r.getField(1).getInteger()
+    Integer id = r.getField(0).getInteger()
+    Integer timeclass = r.getField("rclasstype_l").getInteger()
+    Integer timelevel = r.getField("rtimelevel_l").getInteger()
+    Integer offsetDB = r.getField("offset_l").getInteger()
+    Integer intervalUnit = r.getField("rinterval_t_unit_l").getInteger()
+    Integer intervalCount = r.getField("interval_t_count_l").getInteger()
+    Long offset = 0
+    if (timelevel = 1 or timelevel = 2) and (timeclass = 0 or timeclass = 1 or timeclass = 2) then
+        offset = minute(r.getField("start_ts").getTimestamp().minute() + r.getField("start_ts").getTimestamp().hour() * 60)
+    elseif timelevel = 3 and (timeclass = 1 or timeclass = 2) and offsetDB <> 0 then
+        if offsetDB = -1 then
+          offset = - day(31) - day(30)            
+        elseif offsetDB = -2 then
+          offset = - day(31) - day(30)
+        endif
+    endif
+    // Totals and Mean values from day, month, year timeseries should change the time stamp after read from container: force it to be 00:00:00 
+    // Example: container of Day-Mean has 2010-10-05 07:30 => we make 2010-10-05 00:00 and use the offset, which is stored in the meta data.
+    Boolean setTime00_00 = timelevel >= 1 and (timeclass = 0 or timeclass = 1 or timeclass = 2)
+
+    // äquidistante, anfangsgespeicherte Werte: Monats- und Jahreszeitreihen
+    if type = 60 then
+      tsFrom = tsFrom - 1
+      tsUntil = tsUntil - 1    
+    endif
+    result = getTimeseriesValuesFromContainer66UsePS(cb3, type, id, intervalCount, intervalUnit, tsFrom, tsUntil)
+    f = result.getField("status")
+    if f = null then
+      f = result.getField("state_l")
+    endif
+    String statusName = ""
+    if f != null then
+        statusName = f.getName()
+    endif
+    String sel = pattern("%s", result.desc().filter("NAME != 'timeseries_l' and NAME != 'isvalid_l'").select("if(NAME = 'tstamp_ts', if(setTime00_00, 'tstamp_ts.getDate().getStart() + offset tstamp_ts', 'tstamp_ts + offset tstamp_ts') , if(NAME = statusName, '" + statusName + " as Long state_l', NAME))"))
+    if f != null then
+      sel = sel + ", " + statusName + " div 0x10000000 pf"
+    endif
+    result = result.select(sel)
+/*    
+    if r.next() then
+      r1 = getTimeseriesValuesFromContainer(r.getField(1).getInteger(), r.getField(0).getInteger())
+      if (r1 != null) then
+        ValueBuffer vb1 = result.ValueBuffer()
+        ValueBuffer vb2 = r1.ValueBuffer()
+        ValueBuffer vbJoin = leftJoin(vb1, "main", vb2, "second", vb1.getField(0).getName(), vb1.getField(0).getName())
+		result = vbJoin.Reader().select(if(f = null, sel1, sel2))       
+      endif      
+    endif
+*/    
+  endif
+  getTimeseriesValues66 = result
+  r.close()
+endfunc
+
+
+function getTimeseriesValues66(DBConnection cb3, Long valuelistID, Timestamp[] tsFromUntil) : Reader
+    getTimeseriesValues66 = getTimeseriesValues66(cb3, valuelistID, tsFromUntil[0], tsFromUntil[1]) 
+endfunc
+
+/**
+ * returns true if the given primary flag is missing (1)
+ *@param pf 
+ *@return
+ */
+function primaryFlagIsMissing(Integer pf) : Boolean
+    primaryFlagIsMissing = (pf = 1)
+endfunc
+
+// 0..15: 1 = missing, 0 = unchecked, 2 = incomplite 3 = complete, 4 = suspect, 5 = estimated, 6 = good
+function getPrimaryFlag(Integer status) : Integer
+   static Integer mask = 256 mul 256 mul 256 mul 16
+   getPrimaryFlag = status div mask 
+endfunc
+
+function isMissing(Integer status) : Boolean
+   static Integer mask = 256 mul 256 mul 256 mul 16
+   isMissing = (status div mask) = 1
+endfunc
+
+
+
+
+
+/**
+ * 
+ *@param valuelistID
+ *@param exceptionalOffset [0] = offset in milliseconds, [1] = offset in months, null => no exceptional offset.
+ *@return a Reader with time series values.
+ */
+function getTimeseriesValues66HR(DBConnection cb3, Long valuelistID, Timestamp tsFrom, Timestamp tsUntil) : Reader
+  
+endfunc
+
+
+
+function getCoverage(DBConnection cb3, Integer vlid) : Timestamp[]
+  // Writer w = cb3.prepareQuery("select mindate_ts, maxdate_ts from ts_datastock where valuelist_l = ?")
+  Writer w = sc.prepare(cb3, "select mindate_ts, maxdate_ts from ts_datastock where valuelist_l = ?", null)
+  Timestamp[] result = null
+  Reader r = w.execute(vlid)
+  if (not r.next()) then
+    return null  
+  else
+    result = new Timestamp[2]
+    result[0] = r.getField(0).getTimestamp()
+    result[1] = r.getField(1).getTimestamp()
+  endif
+  getCoverage = result
+  return 
+endfunc

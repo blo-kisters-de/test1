@@ -1,0 +1,27 @@
+include /project/bvag/Util.kis
+struc KeyValue
+   String key
+   String value
+endstruc
+
+function KeyValue.update(KeyValue this, DataDict d, DataDict result) : Object
+  KeyValue.update = this.value
+  if this.value = null or this.value = "" or left(this.value, 1) != "=" then
+     result.set(this.key, this.value)
+  else
+     String dt = d.getDataType(this.key)
+     String post 
+     if dt = "Object" then
+        post = ""
+     else
+        post = " as " + dt
+     endif
+     String v = "(" + mid(this.value, 2) + ")" + post
+     Reader r = d.getRecord().select(v)
+     r.next()
+     dt = r.getField(0).getDataType()
+     execute("result.set" + dt + "(this.key, r.getField(0).getObject())")
+     r.close()
+     KeyValue.update = v
+  endif
+endfunc

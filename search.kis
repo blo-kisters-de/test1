@@ -1,0 +1,34 @@
+
+
+/**
+ * searches in DB for any token/content
+ *@param cont the content you are looking for
+ *@param wholeWord determines whether the String should be conained completely in a column or only conaining
+ *@param filter an optional filter for table names "contains"
+ *@param limit max number of records to inspect in each table of the DB
+ *@return a list with occurrences
+ */
+function DBConnection.search(DBConnection c, String cont, Boolean wholeWord, String filter, Integer limit) : Reader
+  if wholeWord then
+     cont = "#" + cont + "#"
+  endif
+  Reader r = c.select("table_name sname_s from user_tables")
+  if (filter != null and filter != "") then
+    r = r.filter("lower(sname_s) contains lower(filter)")
+  endif
+  Reader result
+  while r.next()
+      Error error
+      try
+        Reader r1 = c.select("* from " + r.sname_s).select("'#' + this.getLine('#') + '#' s").nextAndClose(limit).filter("s contains cont").select("'" + r.sname_s + "' table, %").ValueBuffer().Reader()
+        result = result + r1
+        dac.addString("Table", r.sname_s)
+      catch error
+        dac.addString("Error", r.sname_s)
+      endtry
+  endwhile
+  ValueBuffer vb = result.ValueBuffer()
+  dac.addReader("result", vb.Reader())
+  DBConnection.search = vb.Reader()
+endfunc
+

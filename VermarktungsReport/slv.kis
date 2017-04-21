@@ -1,0 +1,318 @@
+include /project/bvag/VermarktungsReport/vermarktungsReport.kis
+
+struc SLV
+    Integer mainBook
+    Integer hpfc
+    // Saldo-Zeitreihe 3.1_SLV_E_Trading
+    Integer openPositionTS
+    Integer tradeBook
+    
+    Integer prognosisBook
+    
+    Integer carbonBook
+    Integer carbonBookSaldo
+    Integer carbonPrognosisBook
+
+    Integer zBook
+    Integer zBookSaldo  
+    Integer zPrognosisBook
+    
+    
+endstruc
+
+
+function SLV.create() : SLV
+  String saldoFilter = "specification_l = 5105"
+    
+    
+  B3Book b = new B3Book("3_SLV")
+  Reader r = b.select(conf.pfm, "book.ident_book_l book, book.ident_price_l price", "")
+  SLV slv = new SLV
+  if r.next() then  
+    slv.mainBook = r.book
+  endif
+  r.close()
+  B3Timeseries bt = new B3Timeseries()
+  r = bt.filter("specification_l = 10015").select(conf.pfm, "Timeseries.ident ident", "")
+  if r.next() then
+    slv.hpfc = r.ident
+  endif
+  r.close()
+  
+  b = new B3Book("SLV")
+  r = b.getInstance().getParameterList().getTimeseriesList().filter(saldoFilter).select(conf.pfm, "Book.ident_book_l book, Timeseries.ident ident", "")
+  if r.next() then
+     slv.openPositionTS = r.ident 
+     slv.tradeBook = r.book
+  endif
+  r.close()
+
+  b = new B3Book("3.1_SLV_E_Prog")
+  r = b.select(conf.pfm, "Book.ident_book_l book", "")
+  if r.next() then
+    slv.prognosisBook = r.book
+  endif
+  r.close()
+  
+  
+  b = new B3Book("3.2_SLV_SWP")
+  r = b.getInstance().getParameterList().getTimeseriesList().filter(saldoFilter).select(conf.pfm, "Book.ident_book_l book, Timeseries.ident ident", "")
+  if r.next() then
+    slv.carbonBookSaldo = r.ident
+    slv.carbonBook      = r.book
+  endif
+  r.close()
+  
+  b = new B3Book("3.3_SLV_Z_Trad")
+  r = b.getInstance().getParameterList().getTimeseriesList().filter(saldoFilter).select(conf.pfm, "Book.ident_book_l book, Timeseries.ident ident", "")
+  if r.next() then
+    slv.zBookSaldo = r.ident
+    slv.zBook      = r.book
+  endif
+  r.close()
+  
+  b = new B3Book("3.2_SLV_SWP_Prog")
+  r = b.select(conf.pfm, "Book.ident_book_l book", "")
+  if r.next() then
+    slv.carbonPrognosisBook  = r.book
+  endif
+  r.close()
+  
+  b = new B3Book("3.3_SLV_Z_Prog")
+  r = b.select(conf.pfm, "Book.ident_book_l book", "")
+  if r.next() then
+    slv.zPrognosisBook  = r.book
+  endif
+  r.close()
+  
+ 
+  SLV.create = slv  
+endfunc
+
+
+Integer year = 2017
+function getSLVData(Integer year) : Reader
+ 
+ Timestamp tsFrom = date(year, 1, 1)
+ Timestamp tsUntil = date(year + 1, 1,1)   
+
+ SLV slv = new SLV()
+
+ VR_ResultRecord res = new VR_ResultRecord
+ res.name = "SLV"
+ res.year = year
+
+
+// Jahressumme der Base-Stunden: 
+ res.baseHours = getTimeseriesValues66(conf.pfm, vmRepCFG.baseYearHours, tsFrom, tsUntil).do("value0_fl")
+
+// Jahressumme der Peak-Stunden:
+ res.peakHours = getTimeseriesValues66(conf.pfm, vmRepCFG.peakYearHours, tsFrom, tsUntil).do("value0_fl")
+
+ //Off-Peak-Preis als HPFC-Werte für Off-Peak-Stunden:
+ ValueBuffer offPeakpreis = getTimeseriesValues66(conf.pfm, vmRepCFG.hpfcOffPeak, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+
+// Peak-Preis als HPFC-Werte für Peak-Stunden:
+ ValueBuffer peakpreis = getTimeseriesValues66(conf.pfm, vmRepCFG.hpfcPeak, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+ 
+ 
+ // 3.	Offene Position Strom als Saldo (Prognose – Vermarktung) für Strommenge eines jeden Kraftwerkes des Bezugsvertrags in seinem Elektrizität-Buch „3.1_SLV_E_Trading“ finden (Zeitreihe „Saldo aller Käufer und Verkäufer inklusive Unterbücher“)
+ ValueBuffer openPosition = getTimeseriesValues66(conf.pfm, slv.openPositionTS, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+ 
+ // 4.	Saldo Strom in Base- und Peak-Bänder zerlegen:
+ // Off-Peak-Wert als Aggregation (Lastgang der offenen Positionen) * (Off-Peak-Preis)
+ res.offPeakValueOpen = Reader.joinCol(offPeakpreis, "p", openPosition, "m", "tstamp_ts", "tstamp_ts").aggregate("total(p.value * m.value) value", "").do("value")
+
+// Peak-Wert als Aggregation (Lastgang der offenen Positionen) * (Peak-Preis)
+ res.peakValueOpen = Reader.joinCol(peakpreis, "p", openPosition, "m", "tstamp_ts", "tstamp_ts").aggregate("total(p.value * m.value) value", "").do("value")
+ 
+ // Off-Peak-Preis von 1MW (=Summe aller Off-Peak-Stundenpreise der HPFC:
+ Float summeOffPeakPrice =  offPeakpreis.aggregate("total(value) value", "").do("value")/4
+
+// Peak-Preis von 1MW (=Summe aller Peak-Stundenpreise der HPFC:
+ Float summePeakPrice =     peakpreis.aggregate("total(value) value", "").do("value")/4
+ 
+// Base-Band der offenen Positionen
+ res.baseBandOpen =  res.offPeakValueOpen / summeOffPeakPrice
+ 
+ // Peak-Band des Fahrplans =(Peak-Wert) / (Peak-Preis von 1MW) - (Base-Band des Fahrplans)
+ res.peakBandOpen =  res.peakValueOpen / summePeakPrice - res.baseBandOpen
+ 
+
+ 
+ // 5.	Geschlossene Position Strom als jahresscharfes Saldo der Handelsgeschäfte (Vermarktungsgeschäfte sollen überwiegen) 
+ // in den Unterbüchern des Elektrizitätsbuches des jeweiligen Kraftwerkes ermitteln (Unterbücher „Own use“ und „Trading“) 
+ // als Geschäfte, die direkt im Buch „3.1_SLV_E_Trading“ liegen, ermitteln (dabei sollen die (Prognose)Geschäfte aus dem Unterbuch 
+ // „3.1_SLV_E_Prognosen“ nicht berücksichtigt werden) – Mengen und Erlöse 
+ // Blo: diese liegen alle in dem Buch Kürzel = "SLV"
+ ValueBuffer vbTrade = getDealsBounded(slv.tradeBook, tsFrom, tsUntil, null) 
+ Reader r = vbTrade.aggregate("total(quantity) q, total(quantity * cost) value", "")
+ r.next()
+ res.valueClosed = r.value
+ res.quantityClosed = r.q
+ 
+ // Prognose (zur Kontrolle der offenen Positionen)
+ ValueBuffer vbPrognosis =  getDealsBounded(slv.prognosisBook, tsFrom, tsUntil, null) 
+ 
+ // Bestimme alle "Deals" der Prognose ...
+ String tsList = pattern("%s", (new B3Book(slv.prognosisBook)).getDealList().getProduct().getCommodity().select(conf.pfm, "Deal.ident", "").select("get5000TS(ident) quantityTS"))
+ 
+ ValueBuffer vbProductPlan =  getProductionPlan(tsList, tsFrom, tsUntil)
+ res.quantityProg = vbProductPlan.aggregate("total(quantity) quantity", "").do("quantity")
+
+ // Bestimmung des Base- und Peak-Bandes:
+ 
+  // Off-Peak-Wert als Aggregation (Lastgang der Prognose-Geschäfte) * (Off-Peak-Preis)
+  res.offPeakValueProg = Reader.joinCol(offPeakpreis, "p", vbProductPlan, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+ 
+// Peak-Wert als Aggregation (Lastgang der Prognose-Geschäfte) * (Peak-Preis)
+ res.peakValueProg = Reader.joinCol(peakpreis, "p", vbProductPlan, "m", "tstamp_ts", "ts").aggregate("total(p.value * m.quantity) value", "").do("value")
+ 
+ 
+// Base-Band des Fahrplans =(Off-Peak-Wert) / (Off-Peak-Preis von 1MW)
+ res.baseBandProg =  res.offPeakValueProg / summeOffPeakPrice
+ 
+ // Peak-Band des Fahrplans =(Peak-Wert) / (Peak-Preis von 1MW) - (Base-Band des Fahrplans)
+ res.peakBandProg =  res.peakValueProg / summePeakPrice - res.baseBandProg
+
+ 
+ // 6.	Offene Position Kohle als Saldo (Prognose – Vermarktung) für Kohle-Swaps-Menge des Bezugsvertrags in seinem Buch „3.2_SLV_SWP“ finden 
+ // (Zeitreihe „Saldo aller Käufer und Verkäufer inklusive Unterbücher“)
+ ValueBuffer vbCarbonSaldo = getTimeseriesValues66(conf.pfm, slv.carbonBookSaldo, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+ 
+ // 7.	Geschlossene Position Kohle als jahresscharfes Saldo der Handelsgeschäfte (Beschaffungsgeschäfte sollen überwiegen), 
+ // die direkt im Kohlebuch Bezugsvertrags „3.2_SLV_SWP“ liegen, ermitteln (dabei sollen die (Prognose)Geschäfte aus dem Unterbuch 
+ // „3.2_SLV_SWP_Prognosen“ nicht berücksichtigt werden) – Mengen und Erlöse
+ ValueBuffer vbCarbonClosed =  getDealsBounded(slv.carbonBook, tsFrom, tsUntil, null) 
+ 
+ 
+ // 8.	Offene Position CO2 als Saldo (Prognose – Vermarktung) für CO2-Menge des Bezugsvertrags des Bezugsvertrags in seinem CO2-Buch 
+ // „3.3_SLV_Z_Trading“ finden (Zeitreihe „Saldo aller Käufer und Verkäufer inklusive Unterbücher“)
+ ValueBuffer vbZSaldo = getTimeseriesValues66(conf.pfm, slv.zBookSaldo, tsFrom, tsUntil).filter("not isMissing(state_l)").ValueBuffer()
+
+ // 9.	Geschlossene Position CO2 als jahresscharfes Saldo der Handelsgeschäfte (Beschaffungsgeschäfte sollen überwiegen) in den Unterbüchern des CO2-Buches 
+ // direkt im CO2-Buch des Bezugsvertrags „3.3_SLV_Z_Trading“ (dabei sollen die (Prognose)Geschäfte aus dem Unterbuch „3.3_SLV_Z_Prognosen“ nicht berücksichtigt werden) 
+ // – Mengen und Erlöse
+ ValueBuffer vbZClosed =  getDealsBounded(slv.zBook, tsFrom, tsUntil, null) 
+ 
+ // 10.	M2M_Base, M2M_Peak, M2M_Kohle, M2M_CO2 finden (Preise zu Bewertung von Strom-Bändern oder Kohle- und CO2-Mengen). 
+ // a.	Für Strom: Cal Base und Peak
+ // b.	Für Kohle sind im Testmandant die Kohle-Preise für drei Frontjahre eingepflegt (Argus)
+ // c.	Für CO2 werden die benötigten Mengen für ein Jahr mit dem Produkt "Dezember des gleichen Jahres wie das Lieferjahr" bewertet (EEX/CO2)
+ Integer priceInstance = (new B3Book(slv.tradeBook)).select(conf.pfm, "Book.ident_price_l", "").do("ident_price_l")
+
+ res.basePrice = getCalPrice(priceInstance, now(), "Base", year)
+ res.peakPrice = getCalPrice(priceInstance, now(), "Peak", year)
+ res.priceCarbon = getCoalPrice(year, now()) 
+ res.priceZ = getCarbonDioxidePrice(year)
+ 
+ res.baseValueOpen = res.baseBandOpen * res.basePrice * res.baseHours
+ res.peakValueOpen = res.peakBandOpen * res.peakPrice * res.peakHours
+ 
+ res.valueOpenCarbon = vbCarbonSaldo.aggregate("total(value) value", "").do("value") * res.priceCarbon
+ res.valueOpenZ = vbZSaldo.aggregate("total(value) value", "").do("value") * res.priceZ
+ 
+
+ // 15.	Erzeugungsprognose Strom aus dem Unterbuch „3.1_SLV_E_Prognosen“ in Base- und Peak-Bänder zerlegen:
+ // a.	Base als preisgewichtete Durchschnittsleistung der Offpeak-Stunden
+ // b.	Peak als preisgewichtete Durchschnittsleistung der Offpeak-Stunden - Base
+ // shon unter 5. bestimmt
+ 
+ // 16.	Umsatzerlöse Strom berechnen als 
+ // (Base Band der Prognose Strom) * (Stundenzahl Base) * M2M_Base  + 
+ // (Peak Band der Prognose Strom) * (Stundenzahl Peak) * M2M_Peak
+ // (Mit M2M als Marktpreise)
+  
+ res.baseValueProg = res.baseBandProg * res.basePrice * res.baseHours
+ res.peakValueProg = res.peakBandProg * res.peakPrice * res.peakHours
+ 
+ res.turnOverProg = res.baseValueProg + res.peakValueProg
+
+
+ // 17.	Brennstoffkosten (geschl. + offen) berechnen als
+ // (Kohle_Prognosemenge) * M2M_Kohle + (CO2_Prognosemenge) * M2M_CO2
+ // a.	Dabei entspricht die Kohle_Prognosemenge der Menge der Prognosegeschäfte aus dem Unterbuch „3.2_SLV_SWP_Prognosen“
+ // b.	Die CO2_Prognosemenge entspricht der Menge der Prognosegeschäfte aus dem Unterbuch „3.2_SLV_Z_Prognosen“
+
+ res.quantityProgCarbon = getDealsBounded(slv.carbonPrognosisBook, tsFrom, tsUntil, null).aggregate("quantity", "").do("quantity")
+ res.valueProgCarbon = res.quantityProgCarbon * res.priceCarbon
+
+ res.quantityProgZ =  getDealsBounded(slv.zPrognosisBook, tsFrom, tsUntil, null).aggregate("quantity", "").do("quantity")
+ 
+ res.valueProgZ = res.quantityProgZ * res.priceZ
+
+ res.fuelCostProg = res.valueProgZ + res.valueProgCarbon
+ 
+ res.DB1 = res.turnOverProg - res.fuelCostProg
+ 
+ // 19.	Transportkosten ermitteln als
+ // Transport (Datei „Spread_Faktoren.xlsx“, Blatt „SLV“ ) * Kohle_Prognosemenge
+ 
+ // entfällt bei SLV!
+ 
+ let d = getCostTables(year)
+ DataDict dSLV = d.VPP
+
+
+ // 20.	Betriebskosten ermitteln als
+ // Anteil_Kosten_Betriebsmittel (Datei „Spread_Faktoren.xlsx“, Blatt „SLV“) *(Transportkosten+ Kohle_Prognosemenge*M2M_Kohle)
+ // INFO: gibt es nicht!
+ // Float anteilKostenBetriebsmittel = dSLV.getFloat("Anteil Kosten Betriebsmittel") * (transport + coalValue)
+ Float anteilKostenBetriebsmittel = 0.0
+ 
+ // 21.	Startkosten übernehmen
+ // (aus Datei „Kennzahlen_VPP.xlsx“, Blatt für jeweiliges Jahr, Spalte F – für den Referenztag (aktuellster Wert zum Referenztag))
+ Float startCost = dSLV.getFloat("startCost")
+  
+ // 22.	DB 2 (Ergebnis vor Fixkosten) ermitteln als
+ // DB 1 (absicherbare Positionen) + Betriebskosten + Startkosten
+ res.DB2 = res.DB1 - anteilKostenBetriebsmittel - startCost
+ 
+ // 23.	Fixkosten berechnen als
+ // (-1)*Fixkosten (Datei „Plan.xlsm“, Blatt für jeweiliges Jahr, Zeile für jeweiliges Kraftwerk, Zeile „SLV“)
+ DataDict dSLVFixcostPlan = d.SLV
+ if dSLVFixcostPlan != null then
+ 
+   Float fixCost = dSLVFixcostPlan.Fixkosten
+
+ // 24.	DB 3 (Ergebnis nach Fixkosten) ermitteln als
+ // DB 2 (Ergebnis vor Fixkosten) + Fixkosten
+   
+   res.DB3 = res.DB2 - fixCost
+   
+   res.plan = dSLVFixcostPlan.Plan
+ endif
+ 
+ r = vbCarbonClosed.aggregate("total(quantity) q, total(quantity * cost) value", "")
+ r.next()
+ res.valueClosedCarbon = r.value
+ res.quantityClosedCarbon = r.q
+ 
+ r = vbZClosed.aggregate("total(quantity) q, total(quantity * cost) value", "")
+ r.next()
+ res.valueClosedZ = r.value
+ res.quantityClosedZ = r.q
+ 
+ 
+ res.turnOverPerformance = res.valueClosed + res.baseValueOpen + res.peakValueOpen
+ res.fuelCostPerformance = res.valueClosedCarbon + res.valueClosedZ + res.valueOpenCarbon + res.valueOpenZ
+ res.DB1Performance = res.turnOverPerformance - res.fuelCostPerformance
+ res.DB2Performance = res.DB1Performance - anteilKostenBetriebsmittel - startCost
+ res.DB3Performance = res.DB2Performance - fixCost
+ res.LTP = res.DB3Performance - res.plan
+ res.Vorteil = res.DB3Performance - res.DB3
+ 
+ String resultSel = "'SLV' name, year" + r0("res.baseHours")+ r0("res.peakHours")+ r0("res.quantityProg")+ r0("res.offPeakValueProg")+ &
+     r0("res.baseValueProg")+ r0("res.peakValueProg")+ r0("res.baseBandProg")+ r0("res.peakBandProg")+ r0("res.offPeakValueOpen")+ &
+     r0("res.peakValueOpen")+ r0("res.baseValueOpen")+ r0("res.baseBandOpen")+ r0("res.peakBandOpen")+ r0("res.valueClosed")+ r0("res.quantityClosed")+ &
+     ", res.basePrice basePrice, res.peakPrice peakPrice, res.priceCarbon priceCarbon, res.priceZ priceZ" + r0("res.valueProgCarbon")+ r0("res.valueProgZ")+ r0("res.valueClosedCarbon")+ &
+     r0("res.valueClosedZ")+ r0("res.valueOpenCarbon")+ r0("res.valueOpenZ")+ r0("res.quantityProgCarbon")+ r0("res.quantityProgZ")+ r0("res.quantityClosedCarbon")+ &
+     r0("res.quantityClosedZ")+ r0("res.quantityOpenCarbon")+ r0("res.quantityOpenZ")+ r0("res.turnOverProg")+ r0("res.fuelCostProg")+ r0("res.DB1")+ r0("res.DB2")+ &
+     r0("res.DB3")+ r0("res.plan")+ r0("res.turnOverPerformance")+ r0("res.fuelCostPerformance")+ r0("res.DB1Performance")+ r0("res.DB2Performance")+ &
+     r0("res.DB3Performance")+ r0("res.LTP")+ r0("res.Vorteil")
+
+ 
+ getSLVData = series("x",0,0,1).select(resultSel)
+ 
+ 
+endfunc

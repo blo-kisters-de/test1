@@ -1,0 +1,23 @@
+.deals {
+  width: 3000px;
+  height: 550px;
+}
+
+.waiting * {
+    cursor: progress;
+}
+
+.aggregation {
+  width: 2000px;
+  height: 550px;
+}
+
+.tpclassoverview {
+  width: 2000px;
+  height: 550px;
+}
+
+.metaData {
+  width: 8000px;
+  height: 550px;
+}

@@ -1,0 +1,421 @@
+include /project/bvag/generalItems.kis
+
+Reader _rDebug
+Object _debug
+
+function createOTC(String iiID, DataDict d, DataDict resultDict) : DataDict
+  static Writer w = conf.pfm.prepareQuery("select ident, id_l, pricepermwh_fl, pricevaluelist_l, buy_si, counterdealident_l, state_si from v_sd_deal where bookident_l = ? and buy_si = ? and supplyend_ts > ? and supplystart_ts <= ?")
+  checkParameterNotNull(resultDict, "", "otc.buy, otc.book", null)
+//   checkParameterNotNull(d, "", "tsFrom, tsUntil", null)
+  Boolean buy = resultDict.getBoolean("otc.buy")
+  Integer book = resultDict.get("otc.book")
+  Timestamp tsFrom = resultDict.getTimestamp("tsFrom")
+  Timestamp tsUntil = resultDict.getTimestamp("tsUntil")
+  Boolean includeInternal = resultDict.includeInternal
+  Integer status = resultDict.status
+
+  if includeInternal = null then
+    includeInternal = true
+  endif
+  if status = null then
+    status = 7
+  endif
+  
+  String additionalFilter = ""
+  if includeInternal = false then
+    additionalFilter = additionalFilter + " and (counterdealident_l = null) "
+  endif
+  
+  if (status != 7 and status != 0) then
+    String af = ""
+    if status and 1 then
+      // state_si = 0 => hypothetisch
+      af = " or state_si = 0 "
+    endif
+    if status and 2 then
+      // state_si = 1 => real
+      af = af + " or state_si = 1 "  
+    endif
+    if status and 4 then
+      // state_si = 2 => real bestätigt
+      af = af + " or state_si = 2 "    
+    endif
+    
+    if (af != "") then
+      additionalFilter = additionalFilter + " and (" +  mid(af, 5) + ")"
+    endif
+    
+  endif
+  
+  
+  if (tsFrom = null) then
+      tsFrom = d.getTimestamp("tsFrom")
+  endif
+  if (tsUntil = null) then
+    tsUntil = d.getTimestamp("tsUntil")  
+  endif
+  Reader r = w.execute(book, buy, tsFrom, tsUntil) 
+  if (additionalFilter != "") then
+    _debug = additionalFilter
+    r = r.filter(mid(additionalFilter, 6))
+  endif
+  r = r.extend("deal", 'conf.pfm.select("ident_vl_l from v_zr_all where ident_inst_l = " + ident + " and specification_l = 5000")', "inst", false)
+  if r = null then
+      resultDict.setFloat("specificPrice", null)
+      resultDict.setFloat("maxQuantity", 0)
+      resultDict.setFloat("totalCost", 0)
+      resultDict.setFloat("totalQuantity", 0)
+      return
+  endif
+  ValueBuffer vb1 = r.ValueBuffer()
+  resultDict.set("deals", vb1)
+  r = vb1.Reader()
+  Reader result = null
+  String totalQuantity = ""
+  String totalCost = ""
+  String sel = ""
+  Field fVLID = r.getField("inst.ident_vl_l")
+  Field fDealID = r.getField("deal.id_l")
+  Field fDealPriceVLID = r.getField("deal.pricevaluelist_l")
+  Field fPricePerMWH = r.getField("deal.pricepermwh_fl")
+  ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").ValueBuffer()
+  result = vbTS
+  while r.next()
+    Reader r1 = getTimeseriesValues66(conf.pfm, fVLID.getLong(), tsFrom, tsUntil).groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", "").select(format("tstamp_ts D%1$d.ts, value D%1$d.quantity", fDealID.getLong()) ).ValueBuffer().Reader()
+    Reader rPrice
+    if (fDealPriceVLID.getLong() = null) then
+      rPrice = vbTS.select("ts D" + fDealID.getLong() + ".ts, fPricePerMWH.getFloat() D" + fDealID.getLong() + ".price").ValueBuffer()
+    else
+      rPrice = getTimeseriesValues66(conf.pfm, fDealPriceVLID.getLong(), tsFrom, tsUntil)  &
+          .select(format("tstamp_ts D%1$d.ts, value D%1$d.price", fDealID.getLong())).ValueBuffer().Reader()
+    endif
+    result = result.extend(r1, null, "ts = " + r1.getField(0).getName())
+    result = result.extend(rPrice, null, "ts = " + rPrice.getField(0).getName())
+    result = result.select(format("%%, if (D%1$d.quantity = null or D%1$d.price = null, 0, D%1$d.quantity * D%1$d.price) D%1$d.cost", fDealID.getLong()))  
+
+//    result = Reader.joinCol(result, null, r1, null, "ts", r1.getField(0).getName(), 3)
+//    result = Reader.joinCol(result, null, rPrice, null, "ts", rPrice.getField(0).getName(), 3)
+//    result = result.select(format("%%, if (D%1$d.quantity = null or D%1$d.price = null, 0, D%1$d.quantity * D%1$d.price) D%1$d.cost", fDealID.getLong()))  
+    totalQuantity = totalQuantity + format(" + if(D%1$d.quantity = null, 0, D%1$d.quantity)", fDealID.getLong())
+    totalCost = totalCost + format("+ D%1$d.cost", fDealID.getLong()) 
+    sel = sel + format(", D%1$d.quantity, D%1$d.price, D%1$d.cost", fDealID.getLong())
+  endwhile
+  totalQuantity = mid(totalQuantity, 3)
+  totalCost = mid(totalCost, 3)
+  logInfo("totalQuantity: " + totalQuantity)
+  logInfo("totalCost: " + totalCost)
+  sel = mid(sel, 3)
+  ValueBuffer vb = result.select("ts, " + sel + "," + totalQuantity + " totalQuantity," + totalCost + " totalCost").ValueBuffer()
+  
+
+  Reader rAgg = vb.groupSelect("total(totalQuantity) totalquantity, max(totalQuantity) maxQuantity, total(totalCost) totalCost", "", "")
+  rAgg.next()
+//  String prefix = "otc.buy." + buy
+  resultDict.set("ts", vb)
+  resultDict.set("specificPrice", rAgg.getField("totalCost").getFloat() / rAgg.getField("totalQuantity").getFloat())
+  resultDict.set("maxQuantity", rAgg.getField("maxQuantity").getFloat())
+  resultDict.set("totalCost", rAgg.getField("totalCost").getFloat())
+  resultDict.set("totalQuantity", rAgg.getField("totalquantity").getFloat())
+  rAgg.close()  
+//    vb2.transpose(null, 0, -1, 0, -1, 1).groupSelect("total(F0) total"
+  createOTC = resultDict
+endfunc
+
+String s1
+String s2
+
+  String totalQuantity = ""
+  String totalCost = ""
+  String sel = ""
+ValueBuffer vbPrice
+
+function createPrognoseValue(String iiID, DataDict d, DataDict resultDict) : DataDict
+  static Writer w = conf.pfm.prepareQuery("select ident, id_l, pricepermwh_fl, pricevaluelist_l, buy_si, counterdealident_l, state_si from v_sd_deal where bookident_l = ? and buy_si = ? and supplyend_ts > ? and supplystart_ts <= ?")
+  
+  totalQuantity = ""
+  totalCost = ""
+  sel = ""
+  
+  
+  
+  checkParameterNotNull(resultDict, "", "prognose.buy, prognose.book, prognose.hpfcid", null)
+//   checkParameterNotNull(d, "", "tsFrom, tsUntil", null)
+  Boolean buy = resultDict.getBoolean("prognose.buy")
+  Integer book = resultDict.get("prognose.book")
+  Integer hpfcid = resultDict.get("prognose.hpfcid")
+  Timestamp tsFrom = resultDict.getTimestamp("tsFrom")
+  Timestamp tsUntil = resultDict.getTimestamp("tsUntil")
+  
+  Reader r = w.execute(book, buy, tsFrom, tsUntil) 
+  r = r.extend("deal", 'conf.pfm.select("ident_vl_l from v_zr_all where ident_inst_l = " + ident + " and specification_l = 5000")', "inst", false)
+  if r = null then
+      resultDict.setFloat("specificPrice", null)
+      resultDict.setFloat("maxQuantity", 0)
+      resultDict.setFloat("totalCost", 0)
+      resultDict.setFloat("totalQuantity", 0)
+      return
+  endif
+  ValueBuffer vb1 = r.ValueBuffer()
+  resultDict.set("deals", vb1)
+  r = vb1.Reader()
+  Reader result = null
+  Field fVLID = r.getField("inst.ident_vl_l")
+  Field fDealID = r.getField("deal.id_l")
+  ValueBuffer vbTS = series("ts", "tsFrom + hour(1)", "ts <= tsUntil", "ts + hour(1)").ValueBuffer()
+  // Aktuellste HPFC ermitteln
+  Reader rPriceTS = conf.pfm.select("ident_vl_l, name_zr_s, name_inst_s from v_zr_all where ident_inst_l = " + hpfcid + " and specification_l = 10015")
+  if not rPriceTS.next() then
+     throw runtimeError("not timeseries found for InstID = " + hpfcid + " and specification = 10015")
+  endif
+  result = vbTS
+  Integer priceID = rPriceTS.ident_vl_l 
+  vbPrice = getTimeseriesValues66(conf.pfm, priceID, tsFrom, tsUntil).select("tstamp_ts price.ts, value price.value").ValueBuffer()
+  result = result.extend(vbPrice, null, "ts = price.ts") 
+  while r.next()
+    Reader r1 = getTimeseriesValues66(conf.pfm, fVLID.getLong(), tsFrom, tsUntil). &
+        groupSelect("min(tstamp_ts) + minute(45) tstamp_ts, mean(value) value, count() count", "(tstamp_ts.asLong() - minute(15)) div hour(1)", ""). &
+        select(format("tstamp_ts D%1$d.ts, value D%1$d.quantity", fDealID.getLong()) ).ValueBuffer().Reader()
+    result = result.extend(r1, null, "ts = " + r1.getField(0).getName())
+    result = result.select(format("%%, if (D%1$d.quantity = null, 0, D%1$d.quantity) D%1$d.quantity", fDealID.getLong()))  
+
+    totalQuantity = totalQuantity + format(" + D%1$d.quantity", fDealID.getLong())
+    sel = sel + format(", D%1$d.quantity", fDealID.getLong())
+  endwhile
+  totalQuantity = mid(totalQuantity, 3)
+  totalCost = "price.value * (" + mid(totalQuantity, 2) + ")"
+  logInfo("totalQuantity: " + totalQuantity)
+  logInfo("totalCost: " + totalCost)
+  ValueBuffer vb = result.select("ts, price.value " + sel + "," + totalQuantity + " totalQuantity").select("%, price.value * totalQuantity totalCost").ValueBuffer()
+  
+
+  Reader rAgg = vb.groupSelect("total(totalCost) totalCost, total(totalQuantity) totalQuantity", "", "")
+  rAgg.next()
+  resultDict.set("ts", vb)
+  resultDict.set("totalCost", rAgg.getField("totalCost").getFloat())
+  resultDict.set("totalQuantity", rAgg.getField("totalQuantity").getFloat())
+  rAgg.close()  
+endfunc
+
+
+
+
+function getPowerPlantBook(String filter) : Reader
+  String sql = "* from v_sd_book where shortname_parent_s = 'Erzeugung'"
+  if (filter != "" and filter != null) then
+      sql = sql + " " + filter
+  endif
+  Reader r = conf.pfm.select(sql)     
+  getPowerPlantBook = r
+endfunc
+
+
+function getCategories(Reader r) : DataDict
+  if (r.next()) then
+     Integer parent = r.getField("ident_book_l").getInteger()
+     Reader r1 = conf.pfm.select("* from v_sd_book where ident_parent_l = " + parent)
+     DataDict d = new DataDict()
+     while r1.next()
+         String what = r1.shortname_book_s
+         if contains(what, 'Strom') then
+           d.setInteger("Strom", r1.ident_book_l)
+         elseif contains(what, 'Kohle') then
+           d.setInteger("Kohle", r1.ident_book_l)      
+         elseif contains(what, 'CO2') then
+           d.setInteger("CO2", r1.ident_book_l)      
+         endif
+     endwhile
+     getCategories = d
+  endif  
+endfunc
+
+
+function getValues(DataDict parent, String key, Boolean buy, Date start, Date end) : Integer
+  Integer book = parent.getInteger(key)
+  DataDict result = new DataDict()
+  parent.set(key + "_result", result)
+  DataDict otc = new DataDict()
+  result.set("otc", otc)
+  Timestamp tsFrom = start.getStart()
+  Timestamp tsUntil = end.getStart().addDay(1)
+  Reader r = conf.pfm.select("* from v_sd_book where ident_parent_l = " + book).filter("name_book_s contains 'Own use'")
+  if r.next() then
+     book = r.ident_book_l 
+  endif
+  r.close()
+  otc.set("otc.buy", buy)
+  otc.set("otc.book", book)
+  otc.set("tsFrom", tsFrom)
+  otc.set("tsUntil", tsUntil)
+  project::bvag::test::createOTC("1", result, otc)  
+  
+  if otc.ts != null then
+    ValueBuffer vbDay = (otc.ts as ValueBuffer).Reader().aggregateLocal("(ts-hour(1)).getDate() date, total(totalQuantity) totalQuantity, total(totalCost) totalCost", "(ts-hour(1)).getDate()").ValueBuffer()
+    otc.set("tsDay", vbDay)
+  endif
+endfunc
+
+
+
+function getValues(DataDict parent, String key, Integer book, Boolean buy, Date start, Date end) : Integer
+  DataDict result = new DataDict()
+  parent.set(key + "_result", result)
+  DataDict otc = new DataDict()
+  result.set("otc", otc)
+  Timestamp tsFrom = start.getStart()
+  Timestamp tsUntil = end.getStart().addDay(1)
+  otc.set("otc.buy", buy)
+  otc.set("otc.book", book)
+  otc.set("tsFrom", tsFrom)
+  otc.set("tsUntil", tsUntil)
+  project::bvag::test::createOTC("1", result, otc)  
+  
+  if otc.ts != null then
+    ValueBuffer vbDay = (otc.ts as ValueBuffer).Reader().aggregateLocal("(ts-hour(1)).getDate() date, total(totalQuantity) totalQuantity, total(totalCost) totalCost", "(ts-hour(1)).getDate()").ValueBuffer()
+    otc.set("tsDay", vbDay)
+  endif
+endfunc
+
+/**
+ * calculates timeseries results of all deals for a given configuration
+ *@param parent the dictionary to write the result into
+ *@param book the book
+ *@param start start Date (including)
+ *@param stop  stop Date (including)
+ *@param includeInternal whether internal deals should be taken into account
+ *@param status which time series should be used: (bit-mask: 1 = hypothetic, 2 = real unconfirmed, 4 = real confirmed)
+ *@return the result is written to the datadict parent as key
+ */
+function dealMonitor(DataDict parent, Integer book, Date start, Date stop, Integer status, Boolean includeInternal) : Integer
+    Integer i 
+    for i = 0 to 1 step 1
+      DataDict otc = new DataDict()
+      parent.set("otc_" + whenString(i = 0, "buy", "sell"), otc)
+      Timestamp tsFrom = start.getStart()
+      Timestamp tsUntil = stop.getStart().addDay(1)
+      otc.set("otc.buy", i = 0)
+      otc.set("otc.book", book)
+      otc.set("tsFrom", tsFrom)
+      otc.set("tsUntil", tsUntil)
+      otc.set("includeInternal", includeInternal)
+      otc.set("status", status) 
+      createPrognoseValue("1", parent, otc)  
+      if otc.ts != null then
+        ValueBuffer vbDay = (otc.ts as ValueBuffer).Reader().aggregateLocal("(ts-hour(1)).getDate() date, total(totalQuantity) totalQuantity, total(totalCost) totalCost", "(ts-hour(1)).getDate()").ValueBuffer()
+        otc.set("tsDay", vbDay)
+      endif
+    next
+    ValueBuffer vb = Reader.joinCol(parent.otc_sell.tsDay.asReader(), "Sell", parent.otc_buy.tsDay.asReader(), "Buy", "date", "date").select("Sell.date date, Sell.totalQuantity, Sell.totalCost, Buy.totalQuantity, Buy.totalCost, Sell.totalQuantity - Buy.totalQuantity saldoQuantity, Sell.totalCost - Buy.totalCost saldoCost").ValueBuffer()
+    parent.set("saldoTsDay", vb)
+    Reader agg = vb.Reader().aggregateLocal("total(saldoQuantity) saldoQuantity, total(saldoCost) saldoCost","")
+    if agg.next() then
+      parent.set("saldoQuantity", agg.saldoQuantity.asFloat())
+      parent.set("saldoCost", agg.saldoCost.asFloat())
+    endif  
+    agg.close()
+endfunc
+
+
+function getPrognose(DataDict parent, Boolean buy, Integer book, Integer hpfcIdent, Date start, Date stop) : Integer
+   DataDict prognose = new DataDict()
+   parent.set("prognose_" + whenString(buy, "buy", "sell"), prognose)
+   Timestamp tsFrom = start.getStart()
+   Timestamp tsUntil = stop.getStart().addDay(1)
+   prognose.set("prognose.buy", buy)
+   prognose.set("prognose.book", book)
+   prognose.set("prognose.hpfcid", hpfcIdent)
+   prognose.set("tsFrom", tsFrom)
+   prognose.set("tsUntil", tsUntil)
+   project::bvag::test::createPrognoseValue("1", parent, prognose)  
+   if prognose.ts != null then
+     ValueBuffer vbDay = (prognose.ts as ValueBuffer).Reader().aggregateLocal("(ts-hour(1)).getDate() date, total(totalCost) totalCost", "(ts-hour(1)).getDate()").ValueBuffer()
+     prognose.set("tsDay", vbDay)
+    endif
+endfunc
+
+
+function testPrognose() : DataDict
+  DataDict progValue = new DataDict()
+  DataDict d = new DataDict()
+//  2113001 = Strom-Prognose Mehrum  
+//  1929726 = HPFC
+//    getPrognose(d, true, 2112086 ,1929726, 20170101, 20171231)
+//    getPrognose(d, false, 2112086 ,1929726, 20170101, 20171231)
+   getPrognose(d, true, 2109889 ,1929726, 20160101, 20161231)
+//   getPrognose(d, false, 2109889 ,1929726, 20170101, 20171231)
+  testPrognose = d  
+endfunc
+
+
+function getBooks(Integer parent) : ValueBuffer
+  String filter = "ident_parent_l is null"
+  if parent != null then
+      filter = "ident_parent_l = " + parent
+  endif
+  getBooks = conf.pfm.select("ident_book_l, name_book_s, shortname_book_s, ident_parent_l from v_sd_book where " + filter + " order by name_book_s").ValueBuffer()
+endfunc
+
+function createTree() : Tree
+  Tree t = new Tree("getBooks(null)", new Tree("getBooks(:1)", new Tree("getBooks(:2)", new Tree("getBooks(:3)", new Tree("getBooks(:4)", null)))))
+  createTree = t     
+endfunc
+
+
+ValueBuffer vbTS
+DataDict dTS
+function getPriceTimeseries() : Reader
+  if vbTS = null then
+    vbTS = conf.pfm.select("valuelist_l, min(mindate_ts) mindate_ts, max(maxdate_ts) maxdate_ts from ts_datastock group by valuelist_l").ValueBuffer()
+    dTS = new DataDict()
+    vbTS.do("dTS.set(strl(valuelist_l), {mindate_ts, maxdate_ts})")
+  endif
+  Reader r = conf.pfm.select('prices.ident "prices.ident", stationbase.name_s "stationbase.name_s", stationbase.mstnr_s "stationbase.mstnr_s", ts_valuelist.ident "TS_VALUELIST.IDENT", ts_valuelist.name_s "ts_valuelist.name_s", ts_valuelist.specification_l "ts_valuelist.specification_l"  from prices, stationbase, statchann, ts_valuelist where statchann.mst_l = stationbase.ident and ts_valuelist.stationchannel_l = statchann.ident and prices.ident = stationbase.ident order by stationbase.name_s').select("%, dTS.get(strl(ts_valuelist.ident)) as Timestamp[] vonbis").filter("vonbis != null").select("prices.ident, stationbase.name_s, stationbase.mstnr_s, ts_valuelist.ident, ts_valuelist.name_s, ts_valuelist.specification_l, vonbis[0] von, vonbis[1] bis")
+  getPriceTimeseries = r  
+endfunc
+
+// testPrognose()
+
+// function get
+
+// conf.pfm.select("* from v_sd_book where ident_parent_l = 2110163")
+
+
+
+// conf.pfm.select("* from v_sd_book where shortname_parent_s = 'Erzeugung'")##
+
+function getOpenPositions(DataDict d, Integer book, Date start, Date end) : Integer
+   Integer i
+   for i = 0 to 1 step 1
+     Boolean buy = i = 0
+     String key = whenString(i = 0, "buy", "sell")
+     getValues(d, key, book, buy, start, end)
+   next
+   ValueBuffer buyVB =  d.buy_result.otc.tsDay as ValueBuffer
+   ValueBuffer sellVB = d.sell_result.otc.tsDay as ValueBuffer
+   ValueBuffer diff = buyVB.Reader().extend(sellVB,"sell.").select("date, totalQuantity - sell.totalQuantity open").ValueBuffer()
+   d.set("diff_result", diff)
+endfunc
+
+
+function main() : DataDict
+  Reader r = getPowerPlantBook(null).filter("name_book_s contains 'Mehrum'")
+  DataDict d = getCategories(r)
+  Date start = 20160101
+   Date stop = 20160231
+//  Date stop = 20160201
+  getValues(d, "Strom", false, start, stop)
+  getValues(d, "CO2", true, start, stop)
+  getValues(d, "Kohle", true, start, stop)
+  main = d
+endfunc
+
+/*
+d.asReader()
+
+let vb1 = ((d.Strom_result as DataDict).otc as DataDict).tsDay as ValueBuffer
+let vb2 = ((d.CO2_result as DataDict).otc as DataDict).tsDay as ValueBuffer
+let vb3 = ((d.Kohle_result as DataDict).otc as DataDict).tsDay as ValueBuffer
+
+vb.getFieldCount() mul vb.getRecCount()
+
+getTimeseriesValues66(conf.pfm, 5402076,null, null)
+*/

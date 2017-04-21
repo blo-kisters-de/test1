@@ -1,0 +1,184 @@
+
+struc Configuration
+    DBConnection pfm
+    DBConnection pfmGas
+    DBConnection edm
+    DBConnection msDyn
+    String[] HKN
+    Integer currentHPFC
+    String limitReportResultPath
+endstruc
+
+
+Configuration conf
+
+function initConfiguration() : Integer
+//  return
+  if (conf = null) then
+    DBConnection.registerDriver("oracle.jdbc.driver.OracleDriver")
+    conf = new Configuration
+    DataDict d  = new DataDict()
+    DataDict d1 = new DataDict()
+    Properties.asReader(download("/project/bvag_cfg/cfg.properties")).do("d1.set(key, value)")
+    
+    d.set("user", d1.get("pfm.user"))
+    d.set("password", d1.get("pfm.password"))
+    d.set("url", d1.get("pfm.url"))
+    conf.pfm = createConnection(d)
+
+    d.set("user", d1.get("pfmGas.user"))
+    d.set("password", d1.get("pfmGas.password"))
+    d.set("url", d1.get("pfmGas.url"))
+    conf.pfmGas = createConnection(d)
+
+    
+    
+ //    conf.pfm = createOraConnection("BSEPFMSTROMTEST20170327", "12years", "oracle-12c-srv-n.kisters.de:1521:BEL323")
+    
+    
+    // HKN-Geschäfte (muss noch in die Konfiguration!)
+    conf.HKN = {"13_HKN"}
+    
+    conf.currentHPFC = conf.pfm.select("ident from ts_valuelist where specification_l = 10015").do("ident")
+    
+    conf.limitReportResultPath=d1.get("limitReport.resultPath")
+    
+  endif
+endfunc
+
+
+
+// "Alter BVAG Mandant"
+function initConfigurationALT() : Integer
+//  return
+  if (conf = null) then
+    DBConnection.registerDriver("oracle.jdbc.driver.OracleDriver")
+    conf = new Configuration
+    DataDict d  = new DataDict()
+//     d.setString("user", "adbelvispfmstrom1")
+    d.set("user", "BVAGPFMSTROMTEST") 
+    d.setString("password", "A1F077D5FAB464D1C9356961E5F1552DCCA2D4085224E4D4B84BD36C1B31B65616980C1EFD08A05290248712351E2BFD4B37B7A4DD26E9B6A55AAA070778B653BCC81DBBBA458651F3F17A41B3F99F13A98B1DD93D39E2E5B600DFF0FCBE4C5636A27AC9895F96F9BFC72116B117BD420EDFCCE465E6534923C85EFE53081D5560AE026C19EAD2BCBC5301A2F7621634EF8385458DB8FFBC905F685499745D74756C8EF162789743FD74DAFC6A392B12A296EFFAF9F25C8EA59EEC954692A84D07766E47AD540A3832DE28C11F284F1EEBAC1629A47CF827B86767A7F01892E0C6E8ED0E7C013D9BA7921CDDE2443EE5F166901BE34BF6305FE0D93489DC2FD7")
+    d.setString("url", "jdbc:oracle:thin:@//oracle-12c-srv-n:1521/bel324")
+//    d.setString("url", "jdbc:oracle:thin:@//oracle-12c-srv-n:1521/bel321")
+    conf.pfm = createConnection(d)
+    
+//    d.setString("user", "eonwwedmstromvert01122015")
+    d.setString("password", "6FE731206DABE8C8DEEB39A7003D0526A144979FE3D9A6E9F0B3922A949BA9A3920280F3EC2C29E122E03954FA1ADC7731F1607415D5D97018B6C35E329D3787337071D17C2A53CF13A206F43E2E719B14DB9084E66102BD4EF30E86819B7582C4C7D4AA7FFD6027BE69219A2AB6513D11A2854EDF8D1F86EF4007216792AF2C12EE3EC2C926CB43D9ABD2EB31A93B608906B58F7C61269BFCB93FA70096AF8D86993B6EE5D5579B6697EEB7F610CC463556CFBD79A0372B9C7FE79E1FC319E4A2AF46A945A9173BBF2431C623D35569102105A750A05361193778F1EE1214E187A5925F2C51A690D5FD8CD60FA2DE49E103C557437D73A0DD172CD296974FD2")
+//	d.setString("url", "jdbc:oracle:thin:@//oracle-11g-srv-n:1521/bel322")
+
+//    d.setString("user", "freitalerstromnetz20160210")
+//    d.setString("url", "jdbc:oracle:thin:@//oracle-12c-srv-n:1521/bel321")
+
+    d.set("user", "eonmitteenmstrom20160119")
+    d.setString("url", "jdbc:oracle:thin:@//oracle-11g-srv-n:1521/bel322")
+
+//	conf.edm = createConnection(d)
+    
+    
+  endif
+endfunc
+
+
+
+
+function initConfigurationLocal() : Integer
+//  return
+  if (conf = null) then
+    DBConnection.registerDriver("oracle.jdbc.driver.OracleDriver")
+    conf = new Configuration
+    DataDict d  = new DataDict()
+//     d.setString("user", "adbelvispfmstrom1")
+    d.set("user", "BSEPFMSTROM20170113") 
+    d.setString("password", "A1F077D5FAB464D1C9356961E5F1552DCCA2D4085224E4D4B84BD36C1B31B65616980C1EFD08A05290248712351E2BFD4B37B7A4DD26E9B6A55AAA070778B653BCC81DBBBA458651F3F17A41B3F99F13A98B1DD93D39E2E5B600DFF0FCBE4C5636A27AC9895F96F9BFC72116B117BD420EDFCCE465E6534923C85EFE53081D5560AE026C19EAD2BCBC5301A2F7621634EF8385458DB8FFBC905F685499745D74756C8EF162789743FD74DAFC6A392B12A296EFFAF9F25C8EA59EEC954692A84D07766E47AD540A3832DE28C11F284F1EEBAC1629A47CF827B86767A7F01892E0C6E8ED0E7C013D9BA7921CDDE2443EE5F166901BE34BF6305FE0D93489DC2FD7")
+    d.setString("url", "jdbc:oracle:thin:@//localhost:1521/orcl")
+//    d.setString("url", "jdbc:oracle:thin:@//oracle-12c-srv-n:1521/bel321")
+    conf.pfm = createConnection(d)
+    
+//    d.setString("user", "eonwwedmstromvert01122015")
+    d.setString("password", "6FE731206DABE8C8DEEB39A7003D0526A144979FE3D9A6E9F0B3922A949BA9A3920280F3EC2C29E122E03954FA1ADC7731F1607415D5D97018B6C35E329D3787337071D17C2A53CF13A206F43E2E719B14DB9084E66102BD4EF30E86819B7582C4C7D4AA7FFD6027BE69219A2AB6513D11A2854EDF8D1F86EF4007216792AF2C12EE3EC2C926CB43D9ABD2EB31A93B608906B58F7C61269BFCB93FA70096AF8D86993B6EE5D5579B6697EEB7F610CC463556CFBD79A0372B9C7FE79E1FC319E4A2AF46A945A9173BBF2431C623D35569102105A750A05361193778F1EE1214E187A5925F2C51A690D5FD8CD60FA2DE49E103C557437D73A0DD172CD296974FD2")
+//	d.setString("url", "jdbc:oracle:thin:@//oracle-11g-srv-n:1521/bel322")
+
+//    d.setString("user", "freitalerstromnetz20160210")
+//    d.setString("url", "jdbc:oracle:thin:@//oracle-12c-srv-n:1521/bel321")
+
+    d.set("user", "eonmitteenmstrom20160119")
+    d.setString("url", "jdbc:oracle:thin:@//oracle-11g-srv-n:1521/bel322")
+
+//	conf.edm = createConnection(d)
+    conf.edm = createOraConnection("BSEPFMSTROM20170202", "12years", "oracle-12c-srv-n.kisters.de:1521:BEL323")
+    
+  endif
+endfunc
+
+function initConfigurationGas() : Integer
+//  return
+  DBConnection.registerDriver("oracle.jdbc.driver.OracleDriver")
+  if (conf != null) then
+    if conf.edm != null then
+        conf.edm.close()
+    endif
+    if conf.pfm != null then
+        conf.pfm.close()
+    endif
+  endif
+  conf = new Configuration
+  DataDict d  = new DataDict()
+  d.set("user", "BSEPFMGAS20170113") 
+  d.setString("password", "A1F077D5FAB464D1C9356961E5F1552DCCA2D4085224E4D4B84BD36C1B31B65616980C1EFD08A05290248712351E2BFD4B37B7A4DD26E9B6A55AAA070778B653BCC81DBBBA458651F3F17A41B3F99F13A98B1DD93D39E2E5B600DFF0FCBE4C5636A27AC9895F96F9BFC72116B117BD420EDFCCE465E6534923C85EFE53081D5560AE026C19EAD2BCBC5301A2F7621634EF8385458DB8FFBC905F685499745D74756C8EF162789743FD74DAFC6A392B12A296EFFAF9F25C8EA59EEC954692A84D07766E47AD540A3832DE28C11F284F1EEBAC1629A47CF827B86767A7F01892E0C6E8ED0E7C013D9BA7921CDDE2443EE5F166901BE34BF6305FE0D93489DC2FD7")
+  d.setString("url", "jdbc:oracle:thin:@//localhost:1521/orcl")
+  conf.pfm = createConnection(d)
+    
+//    d.setString("user", "eonwwedmstromvert01122015")
+    d.setString("password", "6FE731206DABE8C8DEEB39A7003D0526A144979FE3D9A6E9F0B3922A949BA9A3920280F3EC2C29E122E03954FA1ADC7731F1607415D5D97018B6C35E329D3787337071D17C2A53CF13A206F43E2E719B14DB9084E66102BD4EF30E86819B7582C4C7D4AA7FFD6027BE69219A2AB6513D11A2854EDF8D1F86EF4007216792AF2C12EE3EC2C926CB43D9ABD2EB31A93B608906B58F7C61269BFCB93FA70096AF8D86993B6EE5D5579B6697EEB7F610CC463556CFBD79A0372B9C7FE79E1FC319E4A2AF46A945A9173BBF2431C623D35569102105A750A05361193778F1EE1214E187A5925F2C51A690D5FD8CD60FA2DE49E103C557437D73A0DD172CD296974FD2")
+//	d.setString("url", "jdbc:oracle:thin:@//oracle-11g-srv-n:1521/bel322")
+
+//    d.setString("user", "freitalerstromnetz20160210")
+//    d.setString("url", "jdbc:oracle:thin:@//oracle-12c-srv-n:1521/bel321")
+
+    d.set("user", "eonmitteenmstrom20160119")
+    d.setString("url", "jdbc:oracle:thin:@//oracle-11g-srv-n:1521/bel322")
+
+//	conf.edm = createConnection(d)
+    conf.edm = createOraConnection("BSEPFMSTROM20170202", "12years", "oracle-12c-srv-n.kisters.de:1521:BEL323")
+    
+endfunc
+
+
+
+
+
+initConfiguration()
+
+/**
+ * searches in DB for any token/content
+ *@param cont the content you are looking for
+ *@param wholeWord determines whether the String should be conained completely in a column or only conaining
+ *@param filter an optional filter for table names "contains"
+ *@param limit max number of records to inspect in the DB
+ *@return a list with occurrences
+ */
+function search(String cont, Boolean wholeWord, String filter, Integer limit) : Reader
+//   Reader r = c.select("distinct sname_s from versiontable where sname_s is not null")    
+  DBConnection c = conf.pfm
+  if wholeWord then
+     cont = "#" + cont + "#"
+  endif
+  Reader r = c.select("table_name sname_s from user_tables")
+  if (filter != null and filter != "") then
+    r = r.filter("lower(sname_s) contains lower(filter)")
+  endif
+  Reader result
+  while r.next()
+      Error error
+      try
+        Reader r1 = c.select("* from " + r.sname_s).select("'#' + this.getLine('#') + '#' s").nextAndClose(limit).filter("s contains cont").select("'" + r.sname_s + "' table, %").ValueBuffer().Reader()
+        result = result + r1
+        dac.addString("Table", r.sname_s)
+      catch error
+        dac.addString("Error", r.sname_s)
+      endtry
+  endwhile
+  ValueBuffer vb = result.ValueBuffer()
+  dac.addReader("result", vb.Reader())
+  search = vb.Reader()
+endfunc

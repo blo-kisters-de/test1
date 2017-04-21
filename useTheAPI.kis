@@ -1,0 +1,37 @@
+include /project/bvag/test.kis
+
+
+// All deals:
+// conf.pfm.select("* from v_sd_deal")
+
+// All books and how many deals they have for sell and buy:
+// conf.pfm.select("* from stationbase, v_sd_deal where stationbase.ident = bookident_l order by bookident_l").aggregateLocal("name_s, mstnr_s, bookident_l, total(buy_si = true) buy, total(buy_si = false) sell, total(state_si=0) hypothetic, total(state_si = 1) real, total(state_si = 2) realConfirmed, listDistinct(class_l,',') class_l, min(supplystart_ts) supplystart, max(supplyend_ts) supplyend_ts", "bookident_l")
+
+
+// All books
+// conf.pfm.select("* from v_sd_book")
+
+// All prices
+// conf.pfm.select("* from prices, stationbase where prices.ident = stationbase.ident")
+
+
+// acceptRedefinitionOfFuncAndVar(true)
+
+
+
+// Alle Preiszeitreihen, die Daten haben
+// getPriceTimeseries()
+
+// class_l, deal-klassifikationen
+// conf.pfm.select("* from wk_dealclass")
+
+
+
+// plotline getTimeseriesValues66(conf.pfm, 8270946, null, null)
+
+
+// let c = createOraConnection("BSEPFMSTROM20170113", "12years", "oracle-12c-srv-n.kisters.de:1521:bel324")
+
+conf.pfm.select("* from v_sd_book where ident_parent_l is null")
+
+conf.pfm.select("* from v_sd_book where ident_parent_l = 2213859")
